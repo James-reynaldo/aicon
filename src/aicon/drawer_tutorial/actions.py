@@ -19,7 +19,10 @@ class VeloEEAction(ActionComponent):
     """
 
     state_dim = 3
-    v_max_trans = 0.3
+    # Max translational velocity (m/s)
+    v_max_trans = 0.3 # Default value 0.3
+    # Gradient descent gain (proportional-like) for velocity updates — lower reduces sensitivity
+    ee_gain = 0.1 # Default value 0.1
 
     def _start(self):
         """
@@ -63,8 +66,7 @@ class VeloEEAction(ActionComponent):
         Returns:
             torch.Tensor: Updated translational velocity (t_part)
         """
-        gain = 0.1
-        t_part = gradient_descent(gain, last_action[:3], steepest_grad[:3])
+        t_part = gradient_descent(self.ee_gain, last_action[:3], steepest_grad[:3])
         return t_part
 
     def safety_limiting(self, t_part: torch.Tensor) -> torch.Tensor:

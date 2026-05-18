@@ -12,11 +12,12 @@ from aicon.drawer_tutorial.goals import DrawerOpenViaJointGoal
 from aicon.drawer_tutorial.sensors import DrawerPoseSenser, EEForceSensor, EEPoseSensor
 
 
-def get_building_functions_basic_drawer_motion(sim_env_pointer):
+def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params=None, connection_params=None):
     """
     Builds the connections and components for the basic drawer motion experiment.
     """
-    connection_builders = build_connections()
+    estimator_params = estimator_params or {}
+    connection_builders = build_connections(connection_params)
     component_builders = {
         "GripperAction": lambda mockbuild: GripperAction("GripperAction",
                                                         connections={k: connection_builders[k] for k in
@@ -56,15 +57,17 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer):
                                                                            "GraspedLikelihood",
                                                                            )},
                                                              device=torch.device("cpu"),
-                                                             dtype=torch.double, mockbuild=mockbuild),
+                                                             dtype=torch.double, mockbuild=mockbuild,
+                                                             **estimator_params.get("ee_pose", {})),
         "DrawerPosEstimator": lambda mockbuild: DrawerPositionEstimator("DrawerPosEstimator",
-                                                                        connections={k: connection_builders[k] for k in
-                                                                                     ("DrawerDirectMeasurement",
-                                                                                      "GraspedDrawerKinematics",
-                                                                                      "DrawerKinematics",
-                                                                                     )},
+                                        connections={k: connection_builders[k] for k in
+                                                 ("DrawerDirectMeasurement",
+                                                  "GraspedDrawerKinematics",
+                                                  "DrawerKinematics",
+                                                 )},
                                                                         device=torch.device("cpu"),
                                                                         dtype=torch.double, mockbuild=mockbuild,
+                                                                        **estimator_params.get("drawer_position", {}),
                                                                         ),
         "GraspLikelihoodEstimator": lambda mockbuild: GraspedEstimator("GraspLikelihoodEstimator",
                                                                        connections={k: connection_builders[k] for k in
@@ -73,6 +76,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer):
                                                                                      "DrawerKinematics",
                                                                                      )},
                                                                        dtype=torch.double, mockbuild=mockbuild,
+                                                                       **estimator_params.get("grasp_likelihood", {}),
                                                                        ),
         "KinematicJointEstimator": lambda mockbuild: KinematicJointEstimator("KinematicJointEstimator",
                                                                          connections={k: connection_builders[k] for k in
@@ -82,7 +86,8 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer):
                                                                          goals={"ReduceJointStateDifference": lambda d, t,
                                                                                                             mockbuild=False: DrawerOpenViaJointGoal(
                                                                              is_active=True, dtype=t, device=d,
-                                                                             mockbuild=mockbuild)},
+                                                                             mockbuild=mockbuild, open_value=-0.03)},
+                                                                         **estimator_params.get("kinematic_joint", {}),
                                                                          )
     }
     frame_rates = {

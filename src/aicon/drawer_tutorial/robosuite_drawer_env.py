@@ -14,6 +14,9 @@ import robosuite.utils.transform_utils as T
 # Import the CabinetObject from robosuite_task_zoo
 from robosuite_task_zoo.models.hammer_place import CabinetObject
 
+from xml.etree.ElementTree import Element
+
+
 class DrawerOpenEnv(SingleArmEnv):
     """
     Environment for opening a drawer using a single robot arm.
@@ -272,20 +275,31 @@ class DrawerOpenEnv(SingleArmEnv):
         self.cabinet_qpos_addrs = self.sim.model.get_joint_qpos_addr(self.cabinet_object.joints[0])
         self.cabinet_object_id = self.sim.model.body_name2id(self.cabinet_object.root_body)
         
-        # Get the drawer body (which is a child of the cabinet)
-        # The drawer is the first child body of the cabinet
-        drawer_body_name = None
-        for body_id in range(self.sim.model.nbody):
-            if self.sim.model.body_parentid[body_id] == self.cabinet_object_id:
-                drawer_body_name = self.sim.model.body_id2name(body_id)
-                if "drawer" in drawer_body_name.lower():
+        # Resolve drawer body robustly. In this asset, the moving drawer link may not be a direct
+        # child of the cabinet root, so we search by explicit name first, then by keyword.
+        self.drawer_body_id = None
+        preferred_names = ("CabinetObject_drawer_link",)
+        for body_name in preferred_names:
+            try:
+                self.drawer_body_id = self.sim.model.body_name2id(body_name)
+                break
+            except Exception:
+                continue
+
+        if self.drawer_body_id is None:
+            for body_id in range(self.sim.model.nbody):
+                body_name = self.sim.model.body_id2name(body_id)
+                if body_name is not None and "drawer" in body_name.lower():
                     self.drawer_body_id = body_id
                     break
-        
-        if not hasattr(self, "drawer_body_id"):
-            # If we can't find a drawer body, use the cabinet body as fallback
+
+        if self.drawer_body_id is None:
+            # Last resort fallback
             self.drawer_body_id = self.cabinet_object_id
             print("Warning: Couldn't find drawer body, using cabinet body instead")
+        else:
+            resolved_name = self.sim.model.body_id2name(self.drawer_body_id)
+            print(f"Resolved drawer body: {resolved_name} (ID={self.drawer_body_id})")
         
         # Get the site id for the cabinet handle
         self.cabinet_handle_site_id = self.sim.model.site_name2id("CabinetObject_default_site")
@@ -467,10 +481,12 @@ class DrawerOpenEnv(SingleArmEnv):
         """
         # Drawer joint position (0 when closed, negative when opened)
         drawer_pos = self.sim.data.qpos[self.cabinet_qpos_addrs]
+
+        print(f"Checking success: drawer joint position = {drawer_pos}")
         
         # Consider the drawer open if it has been pulled out by at least 0.1 units
         # The drawer's joint value becomes more negative as it opens
-        return drawer_pos < -0.1
+        return drawer_pos < -0.03
 
     def visualize(self, vis_settings):
         """
@@ -510,14 +526,14 @@ class DrawerOpenEnv(SingleArmEnv):
             self.ee_torque_bias = self.robots[0].ee_torque
             
         return reward, done, info
-    
-    
+
     def get_drawer_handle_pos(self, offset=None):
         if offset is None:
-            offset = np.array([ 0.01042636,  0.16967794, -0.09888733])
-        cabinet_pos = self.sim.data.body_xpos[self.cabinet_object_id]
-        handle_pose = cabinet_pos - offset
-        return handle_pose
+            # offset = np.array([ 0.01042636,  0.16967794, -0.09888733])
+            offset = np.array([ 0.01042636,  0.15967794,  -0.02288733 ])
+        drawer_pos = np.array(self.sim.data.body_xpos[self.drawer_body_id]).copy()
+        real_drawer_pos = drawer_pos - np.array(offset)
+        return real_drawer_pos
         
     @property
     def _has_gripper_contact(self):

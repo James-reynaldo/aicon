@@ -43,9 +43,10 @@ def likelihood_func_visible(pose_ee: torch.Tensor, position_drawer: torch.Tensor
     Returns:
         torch.Tensor: Likelihood value between 0 and 1
     """
+    H_world_to_ee = homogeneous_transform_inverse(exponential_map_se3(pose_ee))
     relative_pos = torch.einsum("ki,ij,j->k",
                                 homogeneous_transform_inverse(H_ee_to_cam),
-                                homogeneous_transform_inverse(exponential_map_se3(pose_ee)),
+                                H_world_to_ee,
                                 torch.cat([position_drawer, torch.ones(1, dtype=position_drawer.dtype,
                                                                        device=position_drawer.device)]))[:3]
     # determine angle from principal camera axis to current relative vector
@@ -80,9 +81,10 @@ def likelihood_dist_func(pose_ee: torch.Tensor, position_drawer: torch.Tensor,
     Returns:
         torch.Tensor: Likelihood value between 0 and 1
     """
+    H_world_to_ee = homogeneous_transform_inverse(exponential_map_se3(pose_ee))
     relative_pos = torch.einsum("ki,ij,j->k",
                                 homogeneous_transform_inverse(H_ee_to_cam),
-                                homogeneous_transform_inverse(exponential_map_se3(pose_ee)),
+                                H_world_to_ee,
                                 torch.cat([position_drawer, torch.ones(1, dtype=position_drawer.dtype,
                                                                        device=position_drawer.device)]))[:3]
     likelihood = torch.exp(-torch.pow(torch.norm(relative_pos) - 0.5, 2) / 2 / 0.1)

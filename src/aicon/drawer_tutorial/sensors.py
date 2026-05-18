@@ -10,7 +10,6 @@ import torch
 import numpy as np
 
 from aicon.base_classes.connections import ActiveInterconnection
-from aicon.drawer_experiment.util import get_sine_of_angles
 from aicon.base_classes.components import SensorComponent
 
 
@@ -86,8 +85,6 @@ class EEPoseSensor(SensorComponent):
 
     def initial_definitions(self):
         self.quantities["ee_pos_meas"] = torch.empty(self.state_dim, dtype=self.dtype, device=self.device)
-
-
 class EEForceSensor(SensorComponent):
     """
     Sensor for obtaining the end-effector force magnitude from the simulation environment.

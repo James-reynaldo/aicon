@@ -10,7 +10,7 @@ import torch
 from loguru import logger
 
 from aicon.base_classes.components import EstimationComponent
-from aicon.drawer_experiment.util import likelihood_dist_func, likelihood_func_visible
+from aicon.drawer_tutorial.util import likelihood_dist_func
 from aicon.inference.ekf import update_ekf, predict_ekf_other_quantity, predict_ekf, \
     update_switching_ekf_triple_connection, update_switching_ekf, update_shifting_ekf
 from aicon.inference.util import gradient_preserving_clipping
@@ -26,6 +26,20 @@ class EEPoseEstimator(EstimationComponent):
     and forward kinematics from velocity commands.
     """
     state_dim = 3
+
+    def __init__(self, name: str, connections: Dict[str, ActiveInterconnection], goals: Union[None, Dict[str, Callable]] = None,
+                 dtype: Union[torch.dtype, None] = None, device: Union[torch.device, None] = None,
+                 mockbuild: bool = False, no_differentiation: bool = False,
+                 prevent_loops_in_differentiation: bool = True,
+                 max_length_differentiation_trace: Union[int, None] = None,
+                 action_process_noise: float = 0.01,
+                 proprio_update_noise: float = 0.01,
+                 initial_uncertainty_scale: float = 0.001):
+        self.action_process_noise = action_process_noise
+        self.proprio_update_noise = proprio_update_noise
+        self.initial_uncertainty_scale = initial_uncertainty_scale
+        super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
+                         prevent_loops_in_differentiation, max_length_differentiation_trace)
 
     def define_estimation_function_f(self):
         """
@@ -55,10 +69,10 @@ class EEPoseEstimator(EstimationComponent):
             """
             mu_pred, Sigma_pred = predict_ekf_other_quantity(c_action, pose_ee, uncertainty_ee, action_velo_ee,
                                                              torch.zeros(3, 3, dtype=self.dtype, device=self.device),
-                                                             torch.eye(3, dtype=self.dtype, device=self.device) * 0.01)
+                                                             torch.eye(3, dtype=self.dtype, device=self.device) * self.action_process_noise)
             mu_new, Sigma_new = update_ekf(c_proprio, mu_pred, Sigma_pred, ee_pos_meas,
-                                           torch.eye(3, dtype=self.dtype, device=self.device) * 0.01,
-                                           torch.eye(3, dtype=self.dtype, device=self.device) * 0.01)
+                                           torch.eye(3, dtype=self.dtype, device=self.device) * self.proprio_update_noise,
+                                           torch.eye(3, dtype=self.dtype, device=self.device) * self.proprio_update_noise)
             Sigma_new = Sigma_new.detach()  # currently no grad possible
             # Work around
             delta = c_proprio(mu_new, ee_pos_meas).detach()
@@ -89,7 +103,7 @@ class EEPoseEstimator(EstimationComponent):
             else:
                 return False
         self.quantities["pose_ee"] = pose_measured_ee
-        self.quantities["uncertainty_ee"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device) * 0.001
+        self.quantities["uncertainty_ee"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_uncertainty_scale
         return True
 
 
@@ -100,6 +114,26 @@ class DrawerPositionEstimator(EstimationComponent):
     and grasp kinematics.
     """
     state_dim = 3
+
+    def __init__(self, name: str, connections: Dict[str, ActiveInterconnection], goals: Union[None, Dict[str, Callable]] = None,
+                 dtype: Union[torch.dtype, None] = None, device: Union[torch.device, None] = None,
+                 mockbuild: bool = False, no_differentiation: bool = False,
+                 prevent_loops_in_differentiation: bool = True,
+                 max_length_differentiation_trace: Union[int, None] = None,
+                 forward_noise_grasped_scale: float = 0.15,
+                 forward_noise_base_scale: float = 0.005,
+                 grasp_update_noise: float = 0.01,
+                 direct_measure_noise: float = 0.01,
+                 grasp_outlier_threshold: float = 0.05,
+                 initial_uncertainty_scale: float = 0.001):
+        self.forward_noise_grasped_scale = forward_noise_grasped_scale
+        self.forward_noise_base_scale = forward_noise_base_scale
+        self.grasp_update_noise = grasp_update_noise
+        self.direct_measure_noise = direct_measure_noise
+        self.grasp_outlier_threshold = grasp_outlier_threshold
+        self.initial_uncertainty_scale = initial_uncertainty_scale
+        super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
+                         prevent_loops_in_differentiation, max_length_differentiation_trace)
 
     def initialize_quantities(self):
         """
@@ -115,7 +149,7 @@ class DrawerPositionEstimator(EstimationComponent):
             else:
                 return False
         self.quantities["position_drawer"] = drawer_pose_measured_ee
-        self.quantities["uncertainty_drawer"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device) * 0.001
+        self.quantities["uncertainty_drawer"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_uncertainty_scale
         return True
 
     def define_estimation_function_f(self):
@@ -144,7 +178,7 @@ class DrawerPositionEstimator(EstimationComponent):
         c_direct_meas = self.connections["DrawerDirectMeasurement"].c_func
 
         def f_func(position_drawer, uncertainty_drawer, pose_ee, uncertainty_ee, drawer_pos_meas,
-                   likelihood_grasped_drawer, dt):
+               likelihood_grasped_drawer, dt):
             """
             Update the drawer position estimate using EKF.
             
@@ -160,16 +194,16 @@ class DrawerPositionEstimator(EstimationComponent):
             Returns:
                 tuple: Updated position and uncertainty estimates
             """
-            forward_noise = likelihood_grasped_drawer * 0.15 * dt + 0.005 * dt
+            forward_noise = likelihood_grasped_drawer * self.forward_noise_grasped_scale * dt + self.forward_noise_base_scale * dt
             mu_new, Sigma_new = predict_ekf(forward_drawer, position_drawer, uncertainty_drawer,
                                             torch.eye(3, dtype=self.dtype, device=self.device) * forward_noise)
             mu_new, Sigma_new = update_switching_ekf(c_grasped, mu_new, Sigma_new, pose_ee, uncertainty_ee,
-                                                     torch.eye(3, 3, dtype=self.dtype, device=self.device) * 0.03,
-                                                     likelihood_grasped_drawer, outlier_rejection_treshold=0.05,
+                                                     torch.eye(3, 3, dtype=self.dtype, device=self.device) * self.grasp_update_noise,
+                                                     likelihood_grasped_drawer, outlier_rejection_treshold=self.grasp_outlier_threshold,
                                                      prevent_uncertainty_state_grad=False)
             mu_new, Sigma_new = update_ekf(c_direct_meas, mu_new, Sigma_new, drawer_pos_meas, 
-                                           torch.eye(3, 3, dtype=self.dtype, device=self.device) * 0.03, 
-                                                     torch.eye(3, 3, dtype=self.dtype, device=self.device) * 0.03,
+                                           torch.eye(3, 3, dtype=self.dtype, device=self.device) * self.direct_measure_noise, 
+                                                     torch.eye(3, 3, dtype=self.dtype, device=self.device) * self.direct_measure_noise,
                                                      prevent_uncertainty_state_grad=False)
             return (mu_new, Sigma_new), (mu_new, Sigma_new)
 
@@ -192,6 +226,20 @@ class GraspedEstimator(EstimationComponent):
     """
     state_dim = 1
 
+    def __init__(self, name: str, connections: Dict[str, ActiveInterconnection], goals: Union[None, Dict[str, Callable]] = None,
+                 dtype: Union[torch.dtype, None] = None, device: Union[torch.device, None] = None,
+                 mockbuild: bool = False, no_differentiation: bool = False,
+                 prevent_loops_in_differentiation: bool = True,
+                 max_length_differentiation_trace: Union[int, None] = None,
+                 initial_likelihood: float = 0.01,
+                 clip_min: float = 1e-10,
+                 clip_max: float = 0.9999999):
+        self.initial_likelihood = initial_likelihood
+        self.clip_min = clip_min
+        self.clip_max = clip_max
+        super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
+                         prevent_loops_in_differentiation, max_length_differentiation_trace)
+
     def initialize_quantities(self):
         """
         Initialize the quantities for grasp state estimation.
@@ -199,7 +247,7 @@ class GraspedEstimator(EstimationComponent):
         Returns:
             bool: True if initialization was successful, False otherwise
         """
-        self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * 0.01
+        self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_likelihood
         return True
 
     def define_estimation_function_f(self):
@@ -230,7 +278,7 @@ class GraspedEstimator(EstimationComponent):
             """
             innovation = c_func(likelihood_grasped_drawer, pose_ee, position_drawer, ee_force_mag_meas, gripper_activation)
             new_likelihood = likelihood_grasped_drawer + innovation
-            new_likelihood = gradient_preserving_clipping(new_likelihood, 1e-10, 0.9999999)
+            new_likelihood = gradient_preserving_clipping(new_likelihood, self.clip_min, self.clip_max)
             return (new_likelihood), (new_likelihood)
 
         return f_func, ["likelihood_grasped_drawer"], ["likelihood_grasped_drawer"]
@@ -239,9 +287,7 @@ class GraspedEstimator(EstimationComponent):
         """
         Initialize the quantities for grasp state estimation.
         """
-        self.quantities["likelihood_grasped_drawer"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
-
-
+        self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_likelihood
 class KinematicJointEstimator(EstimationComponent):
     """
     Estimator for the kinematic joint state of the drawer.
@@ -257,7 +303,16 @@ class KinematicJointEstimator(EstimationComponent):
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_rotation_xy : Union[float, None] = None,
                  initial_uncertainty_scale : Union[float, None] = None,
-                 sample_init_mean : bool = False):
+                 sample_init_mean : bool = False,
+                 grasped_noise: float = 0.002,
+                 ungrasped_noise: float = 0.001,
+                 axis_azimuth_process_noise: float = 0.001,
+                 axis_elevation_process_noise: float = 0.001,
+                 joint_process_noise: float = 0.2,
+                 anchor_process_noise: float = 1e-6,
+                 grasp_threshold: float = 0.2,
+                 grasp_floor: float = 0.2,
+                 covariance_alpha: float = 1.0):
         """
         Initialize the kinematic joint estimator.
         
@@ -278,6 +333,15 @@ class KinematicJointEstimator(EstimationComponent):
         self.initial_rotation_xy = initial_rotation_xy
         self.initial_uncertainty_scale = initial_uncertainty_scale
         self.sample_init_mean = sample_init_mean
+        self.grasped_noise = grasped_noise
+        self.ungrasped_noise = ungrasped_noise
+        self.axis_azimuth_process_noise = axis_azimuth_process_noise
+        self.axis_elevation_process_noise = axis_elevation_process_noise
+        self.joint_process_noise = joint_process_noise
+        self.anchor_process_noise = anchor_process_noise
+        self.grasp_threshold = grasp_threshold
+        self.grasp_floor = grasp_floor
+        self.covariance_alpha = covariance_alpha
         super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
                          prevent_loops_in_differentiation, max_length_differentiation_trace)
 
@@ -288,6 +352,7 @@ class KinematicJointEstimator(EstimationComponent):
         self.quantities["kinematic_joint"][1] = - torch.pi / 2 # is always on the xy plane
         # TODO: this a bit arbitrary, but we can change it later
         self.quantities["kinematic_joint"][0] = - torch.pi / 2 * 0.5
+        # self.quantities["kinematic_joint"][0] = - torch.pi / 2 
 
         self.quantities["kinematic_joint"][3:6] = self.connections["DrawerKinematics"].connected_quantities["position_drawer"]
         self.quantities["uncertainty_joint"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device)
@@ -319,9 +384,9 @@ class KinematicJointEstimator(EstimationComponent):
             """
             return kinematic_joint  # Joints do not naturally move by themselves
 
-        R_additive_grasped = torch.eye(3, device=self.device, dtype=self.dtype) * 0.02
-        R_additive_ungrasped = torch.eye(3, device=self.device, dtype=self.dtype) * 0.00005
-        Q_diag = torch.tensor([0.001, 0.001, 0.1, 0.02, 0.02, 0.02], device=self.device, dtype=self.dtype)
+        R_additive_grasped = torch.eye(3, device=self.device, dtype=self.dtype) * self.grasped_noise
+        R_additive_ungrasped = torch.eye(3, device=self.device, dtype=self.dtype) * self.ungrasped_noise
+        Q_diag = torch.tensor([self.axis_azimuth_process_noise, self.axis_elevation_process_noise, self.joint_process_noise, self.anchor_process_noise, self.anchor_process_noise, self.anchor_process_noise], device=self.device, dtype=self.dtype) # important hyperparameter
 
         def f_func(kinematic_joint, uncertainty_joint, position_drawer, uncertainty_drawer, likelihood_grasped_drawer, dt):
             """
@@ -340,8 +405,8 @@ class KinematicJointEstimator(EstimationComponent):
             """
             # starting from 0.5 grasp likelihood we do not want to integrate any starting point info anymore
             # but instead only about the joint
-            unlikelihood_grasped = gradient_preserving_clipping((0.2 - likelihood_grasped_drawer) / 0.2, 0.0000000001, 1.0).unsqueeze(0)
-            likelihood_grasped = gradient_preserving_clipping(likelihood_grasped_drawer, 0.000000000001, 1.0).unsqueeze(0)
+            unlikelihood_grasped = gradient_preserving_clipping((self.grasp_threshold - likelihood_grasped_drawer) / self.grasp_threshold, 0.0000000001, 1.0).unsqueeze(0)
+            likelihood_grasped = gradient_preserving_clipping(likelihood_grasped_drawer, self.grasp_floor, 1.0).unsqueeze(0) # important also
             shift_diagonal_matrix = torch.diag(torch.cat([likelihood_grasped, likelihood_grasped, likelihood_grasped,
                                                           unlikelihood_grasped, unlikelihood_grasped, unlikelihood_grasped]))
             shift_diagonal_matrix = gradient_preserving_clipping(shift_diagonal_matrix, 0.0, 1.0)
@@ -350,8 +415,10 @@ class KinematicJointEstimator(EstimationComponent):
             # azi, ele, and state are highly influenced when grasped, initial point else
             R_additive = R_additive_grasped * likelihood_grasped + R_additive_ungrasped * unlikelihood_grasped
             mu_new, Sigma_new = update_shifting_ekf(c_func, mu_new, Sigma_new, position_drawer, uncertainty_drawer, R_additive, shift_diagonal_matrix, outlier_rejection_treshold = 1.0)
-            Sigma_new = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
-                                          torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
+            if self.covariance_alpha < 1.0:
+                Sigma_blockdiag = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
+                                              torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
+                Sigma_new = (1 - self.covariance_alpha) * Sigma_new + self.covariance_alpha * Sigma_blockdiag
             return (mu_new, Sigma_new), (mu_new, Sigma_new)
 
         return f_func, ["kinematic_joint", "uncertainty_joint"], ["kinematic_joint", "uncertainty_joint"]
