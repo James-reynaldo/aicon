@@ -182,22 +182,19 @@ def cross_product_matrix(x, is_batch=False):
         out: 3x3 cross product matrix
     """
     if is_batch:
-        n_bodies = x.shape[0]
-        out = torch.zeros(n_bodies, 3, 3, dtype=x.dtype, device=x.device)
-        out[:, 0, 1] = -x[:, 2]
-        out[:, 0, 2] = x[:, 1]
-        out[:, 1, 0] = x[:, 2]
-        out[:, 1, 2] = -x[:, 0]
-        out[:, 2, 0] = -x[:, 1]
-        out[:, 2, 1] = x[:, 0]
+        zeros = torch.zeros_like(x[:, 0])
+        out = torch.stack([
+            torch.stack([zeros, -x[:, 2], x[:, 1]], dim=-1),
+            torch.stack([x[:, 2], zeros, -x[:, 0]], dim=-1),
+            torch.stack([-x[:, 1], x[:, 0], zeros], dim=-1),
+        ], dim=-2)
     else:
-        out = torch.zeros(3,3, dtype=x.dtype, device=x.device)
-        out[0,1] = -x[2]
-        out[0,2] = x[1]
-        out[1,0] = x[2]
-        out[1,2] = -x[0]
-        out[2,0] = -x[1]
-        out[2,1] = x[0]
+        zero = torch.zeros((), dtype=x.dtype, device=x.device)
+        out = torch.stack([
+            torch.stack([zero, -x[2], x[1]]),
+            torch.stack([x[2], zero, -x[0]]),
+            torch.stack([-x[1], x[0], zero]),
+        ])
     return out
 
 def rotation_matrix_axis_angle(u, theta):
@@ -490,14 +487,15 @@ def exponential_map_so3(omega, is_batch=False, is_return_angle=False):
         e = torch.eye(3, dtype=omega.dtype, device=omega.device).unsqueeze(0).repeat(n_batches, 1, 1)
         difference = torch.einsum("bij,b->bij", omega_bracket, torch.sin(angle) / (angle  + 0.000000001)) \
             + torch.einsum("bij,b->bij", torch.einsum("bij,bjk->bik", omega_bracket, omega_bracket), (1.0 - torch.cos(angle)) / torch.pow(angle  + 0.000000001, 2))
-        e[angle != 0] = e[angle != 0] + difference[angle != 0]
+        mask = (angle != 0).to(dtype=omega.dtype).view(-1, 1, 1)
+        e = e + mask * difference
     else:
         angle = torch.norm(omega)
         e = torch.eye(3, dtype=omega.dtype, device=omega.device)
         difference = omega_bracket * torch.sin(angle) / (angle  + 0.000000001)\
             + torch.einsum("ij,jk->ik", omega_bracket, omega_bracket) * (1.0 - torch.cos(angle)) / torch.pow(angle + 0.000000001, 2)
         if angle != 0:
-            e += difference
+            e = e + difference
     if is_return_angle:
         return e, angle
     else:
@@ -521,19 +519,18 @@ def exponential_map_se3(se3_pose, is_batch=False):
         theta = torch.norm(w, dim=1)
         w_hat = cross_product_matrix(w, is_batch=True)
         w_hat_sq = torch.einsum("bij,bjk->bik", w_hat, w_hat)
+        theta_ = theta.view(-1, 1, 1)
         R = torch.eye(3, dtype=se3_pose.dtype, device=se3_pose.device).unsqueeze(0)
         R = R.repeat(n_bodies, 1, 1)
-        R = R + torch.einsum("b,bij->bij", torch.sin(theta), w_hat) / (theta + 1e-10)
-        R = R + torch.einsum("b,bij->bij", 1.0 - torch.cos(theta), w_hat_sq) / (theta**2 + 1e-10)
+        R = R + torch.einsum("b,bij->bij", torch.sin(theta), w_hat) / (theta_ + 1e-10)
+        R = R + torch.einsum("b,bij->bij", 1.0 - torch.cos(theta), w_hat_sq) / (theta_**2 + 1e-10)
         V = torch.eye(3, dtype=se3_pose.dtype, device=se3_pose.device).unsqueeze(0)
         V = V.repeat(n_bodies, 1, 1)
-        V = V + torch.einsum("b,bij->bij", 1.0 - torch.cos(theta), w_hat) / (theta**2 + 1e-10)
-        V = V + torch.einsum("b,bij->bij", theta - torch.sin(theta), w_hat_sq) / (theta**3 + 1e-10)
+        V = V + torch.einsum("b,bij->bij", 1.0 - torch.cos(theta), w_hat) / (theta_**2 + 1e-10)
+        V = V + torch.einsum("b,bij->bij", theta - torch.sin(theta), w_hat_sq) / (theta_**3 + 1e-10)
         t = torch.einsum("bij,bj->bi", V, v)
-        H = torch.eye(4, dtype=se3_pose.dtype, device=se3_pose.device).unsqueeze(0)
-        H = H.repeat(n_bodies, 1, 1)
-        H[:, :3, :3] = R
-        H[:, :3, 3] = t
+        bottom_row = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=se3_pose.dtype, device=se3_pose.device).view(1, 1, 4).repeat(n_bodies, 1, 1)
+        H = torch.cat([torch.cat([R, t.unsqueeze(-1)], dim=-1), bottom_row], dim=-2)
     else:
         v = se3_pose[:3]
         w = se3_pose[3:]
@@ -545,9 +542,10 @@ def exponential_map_se3(se3_pose, is_batch=False):
         V = torch.eye(3, dtype=se3_pose.dtype, device=se3_pose.device) + (1.0 - torch.cos(theta)) * w_hat / (theta**2 + 1e-10)
         V = V + (theta - torch.sin(theta)) * w_hat_sq / (theta**3 + 1e-10)
         t = torch.mv(V, v)
-        H = torch.eye(4, dtype=se3_pose.dtype, device=se3_pose.device)
-        H[:3, :3] = R
-        H[:3, 3] = t
+        H = torch.cat([
+            torch.cat([R, t.unsqueeze(1)], dim=1),
+            torch.tensor([[0.0, 0.0, 0.0, 1.0]], dtype=se3_pose.dtype, device=se3_pose.device),
+        ], dim=0)
     return H
 
 def get_only_se3_V(se3_pose, is_batch=False):

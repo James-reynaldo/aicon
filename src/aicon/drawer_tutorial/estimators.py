@@ -68,7 +68,7 @@ class EEPoseEstimator(EstimationComponent):
                 tuple: Updated pose and uncertainty estimates
             """
             mu_pred, Sigma_pred = predict_ekf_other_quantity(c_action, pose_ee, uncertainty_ee, action_velo_ee,
-                                                             torch.zeros(6, 6, dtype=self.dtype, device=self.device),
+                                                             torch.zeros(3, 3, dtype=self.dtype, device=self.device),
                                                              torch.eye(6, dtype=self.dtype, device=self.device) * self.action_process_noise)
             mu_new, Sigma_new = update_ekf(c_proprio, mu_pred, Sigma_pred, ee_pos_meas,
                                            torch.eye(6, dtype=self.dtype, device=self.device) * self.proprio_update_noise,

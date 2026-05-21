@@ -166,9 +166,7 @@ class EEVeloConnection(ActiveInterconnection):
             # the velocity is applied to the pose
             # we are separating translation and rotation because otherwise there are artifacts from
             # the way they are coupled in Lee space and not the actual Euclidean space
-            new_pose = pose_ee.clone()
-            new_pose[:3] = pose_ee[:3] + action_velo_ee
-            return new_pose
+            return torch.cat([pose_ee[:3] + action_velo_ee, pose_ee[3:]])
 
         return connection_func
 
