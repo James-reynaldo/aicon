@@ -100,11 +100,7 @@ class BearingSensor(SensorComponent):
                  dtype: Union[torch.dtype, None] = None,
                  device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None):
         self.sim_env_pointer = sim_env_pointer
-        self.H_ee_to_cam = torch.tensor([[ 2.5214e-01, -9.6767e-01,  6.4494e-03, -6.3752e-02],
-                                         [ 9.6769e-01,  2.5213e-01, -2.1942e-03, -1.6633e-02],
-                                         [ 4.9714e-04,  6.7943e-03,  9.9998e-01,  4.0590e-02],
-                                         [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]],
-                                        dtype=dtype or torch.float64, device=device or torch.device("cpu"))
+        self.H_ee_to_cam = torch.eye(4, dtype=dtype or torch.float64, device=device or torch.device("cpu"))
         super().__init__(name, connections, dtype, device, mockbuild=mockbuild)
 
     def obtain_measurements(self) -> bool:

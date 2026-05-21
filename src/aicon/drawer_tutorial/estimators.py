@@ -499,11 +499,7 @@ class DrawerPositionEstimator(EstimationComponent):
             H_ee_to_cam = H_ee_to_cam_result.to(dtype=self.dtype, device=self.device)
         except (AssertionError, AttributeError):
             print("Fallback on saved transform")
-            H_ee_to_cam = torch.tensor([[2.5214e-01, -9.6767e-01, 6.4494e-03, -6.3752e-02],
-                                        [9.6769e-01, 2.5213e-01, -2.1942e-03, -1.6633e-02],
-                                        [4.9714e-04, 6.7943e-03, 9.9998e-01, 4.0590e-02],
-                                        [0.0000e+00, 0.0000e+00, 0.0000e+00, 1.0000e+00]],
-                                       dtype=self.dtype, device=self.device)
+            H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
         print(f"pose_ee:\n{pose_ee}\nrelative_position:\n{relative_position}\nH_ee_to_cam:\n{H_ee_to_cam}")
         H = torch.einsum("ij,jk->ik", exponential_map_se3(pose_ee), H_ee_to_cam)
         if self.initial_drawer_pos is not None:
@@ -574,11 +570,7 @@ class DrawerPositionEstimator(EstimationComponent):
             H_ee_to_cam = H_ee_to_cam_result.to(dtype=self.dtype, device=self.device)
         except (AssertionError, AttributeError):
             print("Fallback on saved transform")
-            H_ee_to_cam = torch.tensor([[2.5214e-01, -9.6767e-01, 6.4494e-03, -6.3752e-02],
-                                        [9.6769e-01, 2.5213e-01, -2.1942e-03, -1.6633e-02],
-                                        [4.9714e-04, 6.7943e-03, 9.9998e-01, 4.0590e-02],
-                                        [0.0000e+00, 0.0000e+00, 0.0000e+00, 1.0000e+00]],
-                                       dtype=self.dtype, device=self.device)
+            H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
         def process_visual_measurement(Sigma, likelihood_grasped_drawer, likelihood_visible_drawer, mu,
                                        pose_ee, relative_position_in_CF_drawer, uncertainty_ee, dt, dtype, device):
             """
