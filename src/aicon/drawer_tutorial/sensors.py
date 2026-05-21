@@ -11,6 +11,8 @@ import numpy as np
 
 from aicon.base_classes.connections import ActiveInterconnection
 from aicon.base_classes.components import SensorComponent
+from aicon.drawer_tutorial.util import get_sine_of_angles
+from aicon.math.util_3d import exponential_map_se3, homogeneous_transform_inverse
 
 
 class DrawerPoseSenser(SensorComponent):
@@ -63,7 +65,7 @@ class EEPoseSensor(SensorComponent):
     """
     Sensor for obtaining the end-effector position from the simulation environment.
     """
-    state_dim = 3
+    state_dim = 6
 
     def __init__(self, name: str, connections: Dict[str, ActiveInterconnection],
                  dtype: Union[torch.dtype, None] = None,
@@ -77,7 +79,7 @@ class EEPoseSensor(SensorComponent):
         Returns:
             bool: True if measurements were successfully obtained.
         """
-        ee_pos_np = self.sim_env_pointer.env.get_ee_pos()
+        ee_pos_np = self.sim_env_pointer.env.get_ee_pose()
         curr_sim_time = self.sim_env_pointer.get_sim_time()
         self.timestamp = torch.tensor(curr_sim_time)
         self.quantities["ee_pos_meas"] = torch.tensor(ee_pos_np, dtype=self.dtype, device=self.device)
@@ -85,6 +87,48 @@ class EEPoseSensor(SensorComponent):
 
     def initial_definitions(self):
         self.quantities["ee_pos_meas"] = torch.empty(self.state_dim, dtype=self.dtype, device=self.device)
+
+
+class BearingSensor(SensorComponent):
+    """
+    Sensor for obtaining the drawer bearing from the end-effector frame.
+    """
+
+    state_dim = 3
+
+    def __init__(self, name: str, connections: Dict[str, ActiveInterconnection],
+                 dtype: Union[torch.dtype, None] = None,
+                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None):
+        self.sim_env_pointer = sim_env_pointer
+        self.H_ee_to_cam = torch.tensor([[ 2.5214e-01, -9.6767e-01,  6.4494e-03, -6.3752e-02],
+                                         [ 9.6769e-01,  2.5213e-01, -2.1942e-03, -1.6633e-02],
+                                         [ 4.9714e-04,  6.7943e-03,  9.9998e-01,  4.0590e-02],
+                                         [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]],
+                                        dtype=dtype or torch.float64, device=device or torch.device("cpu"))
+        super().__init__(name, connections, dtype, device, mockbuild=mockbuild)
+
+    def obtain_measurements(self) -> bool:
+        drawer_pos = self.sim_env_pointer.env.get_drawer_handle_pos()
+        ee_pose = self.sim_env_pointer.env.get_ee_pose()
+        curr_sim_time = self.sim_env_pointer.get_sim_time()
+
+        drawer_pos_t = torch.tensor(drawer_pos, dtype=self.dtype, device=self.device)
+        ee_pose_t = torch.tensor(ee_pose, dtype=self.dtype, device=self.device)
+
+        H_ee_to_cam = self.H_ee_to_cam.to(dtype=self.dtype, device=self.device)
+        relative_pos_in_cf_drawer = torch.einsum(
+            "ki,ij,j->k",
+            homogeneous_transform_inverse(H_ee_to_cam),
+            homogeneous_transform_inverse(exponential_map_se3(ee_pose_t)),
+            torch.cat([drawer_pos_t, torch.ones(1, dtype=drawer_pos_t.dtype, device=drawer_pos_t.device)]),
+        )[:3]
+
+        self.timestamp = torch.tensor(curr_sim_time)
+        self.quantities["relative_position_in_CF_drawer"] = get_sine_of_angles(relative_pos_in_cf_drawer)
+        return True
+
+    def initial_definitions(self):
+        self.quantities["relative_position_in_CF_drawer"] = torch.empty(self.state_dim, dtype=self.dtype, device=self.device)
 class EEForceSensor(SensorComponent):
     """
     Sensor for obtaining the end-effector force magnitude from the simulation environment.

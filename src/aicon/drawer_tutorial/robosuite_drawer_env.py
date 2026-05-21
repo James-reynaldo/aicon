@@ -596,6 +596,41 @@ class DrawerOpenEnv(SingleArmEnv):
         ee_pose = self.sim.data.site_xpos[self.robots[0].eef_site_id]
         return ee_pose
 
+    def get_ee_pose(self) -> np.ndarray:
+        """Return the 6D end-effector pose as [x, y, z, ax, ay, az].
+
+        The rotation is returned in axis-angle (rotation vector) form where
+        the last three elements are axis * angle (radians). This is computed
+        from the end-effector site's rotation matrix available in MuJoCo
+        (`sim.data.site_xmat`).
+        """
+        # position
+        pos = np.array(self.sim.data.site_xpos[self.robots[0].eef_site_id]).copy()
+
+        # rotation matrix (MuJoCo stores site_xmat as length-9 row-major)
+        try:
+            mat9 = np.array(self.sim.data.site_xmat[self.robots[0].eef_site_id])
+            R = mat9.reshape((3, 3))
+        except Exception:
+            # fallback: use identity rotation if site matrix unavailable
+            R = np.eye(3)
+
+        # rotation matrix -> axis-angle (rotation vector)
+        # angle = arccos((trace(R)-1)/2)
+        trace = np.clip(np.trace(R), -1.0, 3.0)
+        cos_theta = (trace - 1.0) / 2.0
+        cos_theta = np.clip(cos_theta, -1.0, 1.0)
+        theta = np.arccos(cos_theta)
+        if np.isclose(theta, 0.0):
+            rotvec = np.zeros(3)
+        else:
+            denom = 2.0 * np.sin(theta)
+            axis = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]]) / denom
+            rotvec = axis * theta
+
+        pose = np.concatenate([pos, rotvec])
+        return pose
+
     def get_ee_force_magnitude(self) -> float:
         """Returns the magnitude of the force measured at the end-effector."""
         force = self.robots[0].get_sensor_measurement("gripper0_force_ee")

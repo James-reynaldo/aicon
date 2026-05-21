@@ -10,7 +10,7 @@ from typing import Union
 import torch
 
 from aicon.base_classes.connections import ActiveInterconnection
-from aicon.drawer_tutorial.util import get_sine_of_angles
+from aicon.drawer_tutorial.util import get_sine_of_angles, likelihood_func_visible
 from aicon.math.util_3d import exponential_map_se3, homogeneous_transform_inverse, log_map_se3
 from aicon.middleware.util_ros import wait_for_tf_frame
 from loguru import logger
@@ -41,7 +41,9 @@ def build_connections(connection_params: dict = None):
                    "ForwardKinematics": lambda device, dtype, mockbuild:EEVeloConnection("ForwardKinematics", device=device, dtype=dtype, mockbuild=mockbuild),
                    "DirectMeasurement": lambda device, dtype, mockbuild:EEProprioConnection("DirectMeasurement", device=device, dtype=dtype, mockbuild=mockbuild),
                    "DrawerKinematics": lambda device, dtype, mockbuild: KinematicJointConnection("DrawerKinematics", device=device, dtype=dtype, mockbuild=mockbuild),
-                   "DrawerDirectMeasurement": lambda device, dtype, mockbuild:DrawerDirectMeasurementConnection("DrawerDirectMeasurement", device=device, dtype=dtype, mockbuild=mockbuild)}
+                   "DrawerDirectMeasurement": lambda device, dtype, mockbuild:DrawerDirectMeasurementConnection("DrawerDirectMeasurement", device=device, dtype=dtype, mockbuild=mockbuild),
+                    "ProjectiveGeometry": lambda device, dtype, mockbuild:DrawerCameraEEConnection("ProjectiveGeometry", device=device, dtype=dtype, mockbuild=mockbuild),
+}
     return connections
 
 
@@ -51,7 +53,7 @@ class EEDrawerGraspedConnection(ActiveInterconnection):
     The difference in position should be zero, because a grasped object moves together with the end-effector.
     """
     def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False):
-        super().__init__(name, {"pose_ee": (3,), "uncertainty_ee": (3, 3), "position_drawer": (3,),
+        super().__init__(name, {"pose_ee": (6,), "uncertainty_ee": (6, 6), "position_drawer": (3,),
                                 "uncertainty_drawer": (3, 3), "likelihood_grasped_drawer": (1,)}, dtype=dtype,
                          device=device, mockbuild=mockbuild,
                          # for on/off switching connection we can require gradient signs
@@ -63,7 +65,7 @@ class EEDrawerGraspedConnection(ActiveInterconnection):
 
     def define_implicit_connection_function(self):
         def connection_func(position_drawer, pose_ee):
-            relative_vector = position_drawer - pose_ee
+            relative_vector = position_drawer - pose_ee[:3]
             return relative_vector
 
         return connection_func
@@ -113,7 +115,7 @@ class DistGraspHandConnection(ActiveInterconnection):
                  low_likelihood_threshold: float = 0.1,
                  gripper_activation_threshold: float = 0.5,
                  small_likelihood_value: float = 1e-8):
-        super().__init__(name, {"pose_ee": (3,), "position_drawer": (3,), "uncertainty_drawer": (3,3), "uncertainty_ee": (3,3),
+        super().__init__(name, {"pose_ee": (6,), "position_drawer": (3,), "uncertainty_drawer": (3,3), "uncertainty_ee": (6,6),
                                 "likelihood_grasped_drawer": (1,), "gripper_activation": (1,), "ee_force_mag_meas": (1,)}, dtype=dtype,
                          device=device, mockbuild=mockbuild,)
         # expose internal hyperparameters as instance attributes so they can be swept
@@ -128,7 +130,7 @@ class DistGraspHandConnection(ActiveInterconnection):
     def define_implicit_connection_function(self):
 
         def connection_func(likelihood_grasped_drawer, pose_ee, position_drawer, ee_force_mag_meas, gripper_activation):
-            expected_dist = torch.norm(position_drawer - pose_ee)
+            expected_dist = torch.norm(position_drawer - pose_ee[:3])
             likelihood_given_dist = torch.exp(-expected_dist * self.dist_decay)
             innovation_from_dist = likelihood_given_dist - likelihood_grasped_drawer
 
@@ -156,7 +158,7 @@ class EEVeloConnection(ActiveInterconnection):
     Links the end-effector estimator to the action component by applying the action velocity to the pose.
     """
     def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False):
-        super().__init__(name, {"pose_ee": (3,), "uncertainty_ee": (3,3), "action_velo_ee": (3,)}, dtype=dtype, device=device, mockbuild=mockbuild,)
+        super().__init__(name, {"pose_ee": (6,), "uncertainty_ee": (6,6), "action_velo_ee": (3,)}, dtype=dtype, device=device, mockbuild=mockbuild,)
 
     def define_implicit_connection_function(self):
         def connection_func(pose_ee, action_velo_ee):
@@ -164,8 +166,9 @@ class EEVeloConnection(ActiveInterconnection):
             # the velocity is applied to the pose
             # we are separating translation and rotation because otherwise there are artifacts from
             # the way they are coupled in Lee space and not the actual Euclidean space
-            new_position = pose_ee + action_velo_ee
-            return new_position
+            new_pose = pose_ee.clone()
+            new_pose[:3] = pose_ee[:3] + action_velo_ee
+            return new_pose
 
         return connection_func
 
@@ -176,7 +179,7 @@ class EEProprioConnection(ActiveInterconnection):
     the difference between both quantities should be zero.
     """
     def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False):
-        super().__init__(name, {"pose_ee": (3,), "uncertainty_ee": (3,3), "ee_pos_meas": (3,)}, dtype=dtype, device=device, mockbuild=mockbuild,)
+        super().__init__(name, {"pose_ee": (6,), "uncertainty_ee": (6,6), "ee_pos_meas": (6,)}, dtype=dtype, device=device, mockbuild=mockbuild,)
 
     def define_implicit_connection_function(self):
         def connection_func(pose_ee, ee_pos_meas):
@@ -247,5 +250,70 @@ class KinematicJointConnection(ActiveInterconnection):
             translation = orientation_vector * state
             predicted_point = initial_point + translation
             return predicted_point - position_drawer
+
+        return connection_func
+    
+class DrawerCameraEEConnection(ActiveInterconnection):
+    """
+    Active Interconnection between the drawer position, the end-effector and the camera.
+    The position of the drawer should correspond to the position of the end-effector in the camera frame.
+    """
+    def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False):
+        super().__init__(name, {"pose_ee": (6,), "uncertainty_ee": (6, 6), "position_drawer": (3,), "uncertainty_drawer": (3, 3), "relative_position_in_CF_drawer":(3,), "likelihood_visible_drawer": (1,)}, dtype=dtype,
+                         device=device, mockbuild=mockbuild,)
+        self.H_ee_to_cam = None
+
+    def define_implicit_connection_function(self):
+        try:
+            H_ee_to_cam_result = wait_for_tf_frame("panda_link8", "camera_color_optical_frame", timeout=5.0)
+            if H_ee_to_cam_result is None:
+                raise AssertionError("TF frame lookup returned None")
+            H_ee_to_cam = H_ee_to_cam_result.to(dtype=self.dtype, device=self.device)
+        except (AssertionError, AttributeError):
+            print("Fallback on saved transform")
+            H_ee_to_cam = torch.tensor([[ 2.5214e-01, -9.6767e-01,  6.4494e-03, -6.3752e-02],
+                                            [ 9.6769e-01,  2.5213e-01, -2.1942e-03, -1.6633e-02],
+                                            [ 4.9714e-04,  6.7943e-03,  9.9998e-01,  4.0590e-02],
+                                            [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]],
+                                           dtype=self.dtype, device=self.device)
+
+        def connection_func(position_drawer, pose_ee, relative_position_in_CF_drawer):
+            relative_pos = torch.einsum("ki,ij,j->k",
+                                        homogeneous_transform_inverse(H_ee_to_cam),
+                                        homogeneous_transform_inverse(exponential_map_se3(pose_ee)),
+                                        torch.cat([position_drawer, torch.ones(1, dtype=position_drawer.dtype, device=position_drawer.device)]))[:3]
+            only_angles_sin_pred = get_sine_of_angles(relative_pos)
+            # angles should be the same, dist of the measured point is always set for unit length because unknown (RGB)
+            return relative_position_in_CF_drawer - only_angles_sin_pred
+
+        return connection_func
+
+
+class VisibleEEDrawerConnection(ActiveInterconnection):
+    """
+    Active Interconnection for the drawers visibility likelihood.
+    """
+    def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False):
+        super().__init__(name, {"pose_ee": (6,), "uncertainty_ee": (6, 6), "position_drawer": (3,), "uncertainty_drawer": (3, 3), "likelihood_visible_drawer": (1,),}, dtype=dtype,
+                         device=device, mockbuild=mockbuild,)
+
+
+    def define_implicit_connection_function(self):
+        try:
+            H_ee_to_cam_result = wait_for_tf_frame("panda_link8", "camera_color_optical_frame", timeout=5.0)
+            if H_ee_to_cam_result is None:
+                raise AssertionError("TF frame lookup returned None")
+            H_ee_to_cam = H_ee_to_cam_result.to(dtype=self.dtype, device=self.device)
+        except (AssertionError, AttributeError):
+            print("Fallback on saved transform")
+            H_ee_to_cam = torch.tensor([[ 2.5214e-01, -9.6767e-01,  6.4494e-03, -6.3752e-02],
+                                            [ 9.6769e-01,  2.5213e-01, -2.1942e-03, -1.6633e-02],
+                                            [ 4.9714e-04,  6.7943e-03,  9.9998e-01,  4.0590e-02],
+                                            [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]],
+                                           dtype=self.dtype, device=self.device)
+
+        def connection_func(likelihood_visible_drawer, pose_ee, position_drawer):
+            likelihood = likelihood_func_visible(pose_ee, position_drawer, H_ee_to_cam)
+            return likelihood - likelihood_visible_drawer
 
         return connection_func

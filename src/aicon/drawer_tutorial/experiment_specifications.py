@@ -9,7 +9,7 @@ from aicon.drawer_tutorial.estimators import (
     KinematicJointEstimator,
 )
 from aicon.drawer_tutorial.goals import DrawerOpenViaJointGoal
-from aicon.drawer_tutorial.sensors import DrawerPoseSenser, EEForceSensor, EEPoseSensor
+from aicon.drawer_tutorial.sensors import BearingSensor, DrawerPoseSenser, EEForceSensor, EEPoseSensor
 
 
 def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params=None, connection_params=None):
@@ -43,6 +43,12 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                         device=torch.device("cpu"),
                                                         dtype=torch.double, mockbuild=mockbuild,
                                                         sim_env_pointer=sim_env_pointer),
+        "BearingSensor": lambda mockbuild: BearingSensor("BearingSensor",
+                                connections={k: connection_builders[k] for k in
+                                         ("ProjectiveGeometry",)},
+                                device=torch.device("cpu"),
+                                dtype=torch.double, mockbuild=mockbuild,
+                                sim_env_pointer=sim_env_pointer),
         "EEVelocities": lambda mockbuild: VeloEEAction("EEVelocities",
                                                        connections={k: connection_builders[k] for k in
                                                                     ("ForwardKinematics",)},
@@ -53,6 +59,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                              connections={k: connection_builders[k] for k in
                                                                           ("ForwardKinematics",
                                                                            "DirectMeasurement",
+                                                                            "ProjectiveGeometry",
                                                                            "GraspedDrawerKinematics",
                                                                            "GraspedLikelihood",
                                                                            )},
@@ -61,7 +68,9 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                              **estimator_params.get("ee_pose", {})),
         "DrawerPosEstimator": lambda mockbuild: DrawerPositionEstimator("DrawerPosEstimator",
                                         connections={k: connection_builders[k] for k in
-                                                 ("DrawerDirectMeasurement",
+                                                 (
+                                                    #  "DrawerDirectMeasurement",
+                                                  "ProjectiveGeometry",
                                                   "GraspedDrawerKinematics",
                                                   "DrawerKinematics",
                                                  )},
@@ -95,6 +104,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
         "EEForceSensor": 10,
         "EEPosSensor": 10,
         "DrawerPosSensor": 10,
+        "BearingSensor": 10,
         "EEVelocities": 10,
         "EEPoseEstimator": 10,
         "DrawerPosEstimator": 10,
