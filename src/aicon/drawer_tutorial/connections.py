@@ -43,6 +43,7 @@ def build_connections(connection_params: dict = None):
                    "DrawerKinematics": lambda device, dtype, mockbuild: KinematicJointConnection("DrawerKinematics", device=device, dtype=dtype, mockbuild=mockbuild),
                    "DrawerDirectMeasurement": lambda device, dtype, mockbuild:DrawerDirectMeasurementConnection("DrawerDirectMeasurement", device=device, dtype=dtype, mockbuild=mockbuild),
                     "ProjectiveGeometry": lambda device, dtype, mockbuild:DrawerCameraEEConnection("ProjectiveGeometry", device=device, dtype=dtype, mockbuild=mockbuild),
+                   "VisibleLikelihood": lambda device, dtype, mockbuild: VisibleEEDrawerConnection("VisibleLikelihood", device=device, dtype=dtype, mockbuild=mockbuild),
 }
     return connections
 

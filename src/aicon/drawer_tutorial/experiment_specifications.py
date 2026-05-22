@@ -6,6 +6,7 @@ from aicon.drawer_tutorial.estimators import (
     DrawerPositionEstimator,
     EEPoseEstimator,
     GraspedEstimator,
+    VisibleEstimator,
     KinematicJointEstimator,
 )
 from aicon.drawer_tutorial.goals import DrawerOpenViaJointGoal
@@ -56,24 +57,26 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                        dtype=torch.double, mockbuild=mockbuild,
                                                        ),
         "EEPoseEstimator": lambda mockbuild: EEPoseEstimator("EEPoseEstimator",
-                                                             connections={k: connection_builders[k] for k in
-                                                                          ("ForwardKinematics",
-                                                                           "DirectMeasurement",
-                                                                            "ProjectiveGeometry",
-                                                                           "GraspedDrawerKinematics",
-                                                                           "GraspedLikelihood",
-                                                                           )},
+                                     connections={k: connection_builders[k] for k in
+                                          ("ForwardKinematics",
+                                           "DirectMeasurement",
+                                           "ProjectiveGeometry",
+                                           "GraspedDrawerKinematics",
+                                           "GraspedLikelihood",
+                                           "VisibleLikelihood",
+                                           )},
                                                              device=torch.device("cpu"),
                                                              dtype=torch.double, mockbuild=mockbuild,
                                                              **estimator_params.get("ee_pose", {})),
-        "DrawerPosEstimator": lambda mockbuild: DrawerPositionEstimator("DrawerPosEstimator",
-                                        connections={k: connection_builders[k] for k in
-                                                 (
-                                                    #  "DrawerDirectMeasurement",
-                                                  "ProjectiveGeometry",
-                                                  "GraspedDrawerKinematics",
-                                                  "DrawerKinematics",
-                                                 )},
+                "DrawerPosEstimator": lambda mockbuild: DrawerPositionEstimator("DrawerPosEstimator",
+                                                                                connections={k: connection_builders[k] for k in
+                                                                                                 (
+                                                                                                        #  "DrawerDirectMeasurement",
+                                                                                                    "ProjectiveGeometry",
+                                                                                                    "GraspedDrawerKinematics",
+                                                                                                    "DrawerKinematics",
+                                                                                                    "VisibleLikelihood",
+                                                                                                 )},
                                                                         device=torch.device("cpu"),
                                                                         dtype=torch.double, mockbuild=mockbuild,
                                                                         **estimator_params.get("drawer_position", {}),
@@ -87,6 +90,12 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                        dtype=torch.double, mockbuild=mockbuild,
                                                                        **estimator_params.get("grasp_likelihood", {}),
                                                                        ),
+        "VisibleEstimator": lambda mockbuild: VisibleEstimator("VisibleEstimator",
+                                       connections={k: connection_builders[k] for k in
+                                            ("VisibleLikelihood",)},
+                                       device=torch.device("cpu"),
+                                       dtype=torch.double, mockbuild=mockbuild,
+                                       **estimator_params.get("visible", {})),
         "KinematicJointEstimator": lambda mockbuild: KinematicJointEstimator("KinematicJointEstimator",
                                                                          connections={k: connection_builders[k] for k in
                                                                                       ("DrawerKinematics",
@@ -109,6 +118,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
         "EEPoseEstimator": 10,
         "DrawerPosEstimator": 10,
         "GraspLikelihoodEstimator": 10,
+        "VisibleEstimator": 10,
         "KinematicJointEstimator": 10,
     }
     return component_builders, connection_builders, frame_rates

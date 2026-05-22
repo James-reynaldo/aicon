@@ -56,6 +56,7 @@ def main(device, env, rec_save_path=None):
 
     print(f"\nCabinet position from obs: {cabinet_position}")
     print(f"Cabinet orientation matrix from obs:\n{cabinet_orientation}")
+    print(f"Initial robot joint state: {env_obs['robot0_joint_pos']}")
 
     # setup aicon
     component_building_functions, connection_building_functions, frame_rates = (
@@ -80,6 +81,53 @@ def main(device, env, rec_save_path=None):
 
         obs, rew, done, info = env.step(action)
 
+        # Print current drawer position estimate from the estimator (if available)
+        drawer_comp = components.get("DrawerPosEstimator")
+        if drawer_comp is not None:
+            drawer_pos_est = drawer_comp.quantities.get("position_drawer", None)
+            if drawer_pos_est is not None:
+                try:
+                    # Convert torch tensor to numpy for readable printing
+                    if hasattr(drawer_pos_est, "cpu"):
+                        dp = drawer_pos_est.cpu().numpy()
+                    else:
+                        dp = drawer_pos_est
+                except Exception:
+                    dp = drawer_pos_est
+                # print(f"Drawer estimate at t={curr_t:.3f}: {dp}")
+        # Print camera bearing measurement and likelihoods for debugging
+        bearing_comp = components.get("BearingSensor")
+        if bearing_comp is not None:
+            rel_pos_meas = bearing_comp.quantities.get("relative_position_in_CF_drawer", None)
+            if rel_pos_meas is not None:
+                try:
+                    rp = rel_pos_meas.cpu().numpy()
+                except Exception:
+                    rp = rel_pos_meas
+                # print(f"Bearing measurement at t={curr_t:.3f}: {rp}")
+
+        vis_comp = components.get("VisibleEstimator")
+        if vis_comp is not None:
+            vis_like = vis_comp.quantities.get("likelihood_visible_drawer", None)
+            if vis_like is not None:
+                try:
+                    vl = vis_like.cpu().numpy()
+                except Exception:
+                    vl = vis_like
+                # print(f"Visibility likelihood at t={curr_t:.3f}: {vl}")
+
+        grasp_comp = components.get("GraspLikelihoodEstimator")
+        if grasp_comp is not None:
+            grasp_like = grasp_comp.quantities.get("likelihood_grasped_drawer", None)
+            if grasp_like is not None:
+                try:
+                    gl = grasp_like.cpu().numpy()
+                except Exception:
+                    gl = grasp_like
+                # print(f"Grasp likelihood at t={curr_t:.3f}: {gl}")
+
+        # print(f"Robot joint state at t={curr_t:.3f}: {obs['robot0_joint_pos']}")
+
         # Print success state and joint info
         if done:
             print("\n*** SUCCESS! Drawer opened. ***\n")
@@ -91,6 +139,11 @@ def main(device, env, rec_save_path=None):
 def run_demo():
     # Define the desired initial joint positions for the Panda robot (7 joints)
     initial_panda_qpos = np.array([-0.2, 0.2, 0.1, -2.0, 0.0, 1.5, 0.7])
+    # initial_panda_qpos = np.array([ -0.2,  4.45131868e-01,  2.15620724e-03,
+    #                                 -2.37699886e+00, -0.5,  3.12045433e+00,  8.77754819e-01])
+    initial_panda_qpos[4] += np.pi / 2.0 + 0.1 # rotate the arm 90 degrees about the y axis
+    initial_panda_qpos[1] += np.pi / 4.0  # rotate the arm 90 degrees about the y axis
+    initial_panda_qpos[0] -= np.pi / 8.0
     # initial_panda_qpos = None
 
     # Pass the initial pose to the setup function

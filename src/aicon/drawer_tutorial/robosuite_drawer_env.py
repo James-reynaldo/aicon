@@ -482,7 +482,7 @@ class DrawerOpenEnv(SingleArmEnv):
         # Drawer joint position (0 when closed, negative when opened)
         drawer_pos = self.sim.data.qpos[self.cabinet_qpos_addrs]
 
-        print(f"Checking success: drawer joint position = {drawer_pos}")
+        # print(f"Checking success: drawer joint position = {drawer_pos}")
         
         # Consider the drawer open if it has been pulled out by at least 0.1 units
         # The drawer's joint value becomes more negative as it opens
