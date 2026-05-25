@@ -10,8 +10,8 @@ from typing import Union
 import torch
 
 from aicon.base_classes.connections import ActiveInterconnection
-from aicon.drawer_tutorial.util import get_sine_of_angles, likelihood_func_visible
-from aicon.math.util_3d import exponential_map_se3, homogeneous_transform_inverse, log_map_se3
+from aicon.drawer_tutorial.util import get_sine_of_angles, likelihood_func_visible, pose_vec_to_homogeneous
+from aicon.math.util_3d import homogeneous_transform_inverse, log_map_se3
 from aicon.middleware.util_ros import wait_for_tf_frame
 from loguru import logger
 
@@ -72,7 +72,7 @@ class EEDrawerGraspedConnection(ActiveInterconnection):
         return connection_func
 
 
-class DistDrawerEEConnection(ActiveInterconnection):
+class DistDrawerEEConnection(ActiveInterconnection): # unused for sim
     """
     Active Interconnection between the distance estimator, the end-effector and the drawer position.
     Our distance estimate should correspond to the distance between the end-effector and the drawer position.
@@ -89,7 +89,7 @@ class DistDrawerEEConnection(ActiveInterconnection):
             GRASPING_ORIENTATION_DRAWER, dtype=self.dtype, device=self.device)
 
         def connection_func(distance_ee_drawer, pose_ee, position_drawer):
-            H_ee = exponential_map_se3(pose_ee)
+            H_ee = pose_vec_to_homogeneous(pose_ee)
             grasping_point = torch.einsum("ij,jk->ik", H_ee, H_grasping_offset)[:3, 3]
             relative_vector = grasping_point - position_drawer
             dist_mean = torch.norm(relative_vector)
@@ -202,7 +202,7 @@ class DrawerDirectMeasurementConnection(ActiveInterconnection):
 
         return connection_func
 
-class EEFTConnection(ActiveInterconnection):
+class EEFTConnection(ActiveInterconnection): #unused for sim
     """
     Active Interconnection between the end-effector, the force measurements and the external force.
     """
@@ -220,7 +220,7 @@ class EEFTConnection(ActiveInterconnection):
 
         def connection_func(pose_ee, ee_force_measured, ee_force_external):
             # the measured and the current pose should be the same
-            H_ee = exponential_map_se3(pose_ee)
+            H_ee = pose_vec_to_homogeneous(pose_ee)
             rotated_meas_force = torch.einsum("ij,jk,k->i", H_ee[:3, :3], R_sensor, ee_force_measured[:3] - FT_bias_term)
             external_force_meas = rotated_meas_force - expected_force
             return ee_force_external - external_force_meas
@@ -273,11 +273,25 @@ class DrawerCameraEEConnection(ActiveInterconnection):
             H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
 
         def connection_func(position_drawer, pose_ee, relative_position_in_CF_drawer):
+            # experiment-only: force the drawer position used by the visual residual
+            # to a fixed value so we can test whether the residual drops.
+            position_drawer_mod = torch.tensor(
+                [-0.0104, 0.1303, 1.0039],
+                dtype=position_drawer.dtype,
+                device=position_drawer.device,
+            )
+            # print(f"DCEC Using fixed drawer position for c_func: {position_drawer_mod}")
             relative_pos = torch.einsum("ki,ij,j->k",
                                         homogeneous_transform_inverse(H_ee_to_cam),
-                                        homogeneous_transform_inverse(exponential_map_se3(pose_ee)),
+                                        homogeneous_transform_inverse(pose_vec_to_homogeneous(pose_ee)),
                                         torch.cat([position_drawer, torch.ones(1, dtype=position_drawer.dtype, device=position_drawer.device)]))[:3]
             only_angles_sin_pred = get_sine_of_angles(relative_pos)
+            # print(f"DCEC Position: {(position_drawer)}")
+            # print(f"DCEC Pose EE: {(pose_ee)}")
+            # print(f"DCEC relative_pos: {(relative_pos)}")
+            # print(f"DCEC Relative position in CF drawer: {(relative_position_in_CF_drawer)}")
+            # print(f"DCEC only angles sin pred: {(only_angles_sin_pred)}")
+            # print(f"DCEC residual: {(relative_position_in_CF_drawer - only_angles_sin_pred)}")
             # angles should be the same, dist of the measured point is always set for unit length because unknown (RGB)
             return relative_position_in_CF_drawer - only_angles_sin_pred
 
@@ -304,7 +318,13 @@ class VisibleEEDrawerConnection(ActiveInterconnection):
             H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
 
         def connection_func(likelihood_visible_drawer, pose_ee, position_drawer):
-            likelihood = likelihood_func_visible(pose_ee, position_drawer, H_ee_to_cam)
-            return likelihood - likelihood_visible_drawer
+            position_drawer_mod = torch.tensor(
+                [-0.0104, 0.1303, 1.0039],
+                dtype=position_drawer.dtype,
+                device=position_drawer.device,
+            )
+            likelihood = likelihood_func_visible(pose_ee, position_drawer_mod, H_ee_to_cam)
+            print(f"VEDC likelihood: {likelihood}")
+            return likelihood - likelihood_visible_drawer # produced by VisibleEStimator
 
         return connection_func

@@ -10,11 +10,11 @@ import torch
 from loguru import logger
 
 from aicon.base_classes.components import EstimationComponent
-from aicon.drawer_tutorial.util import likelihood_dist_func, likelihood_func_visible
+from aicon.drawer_tutorial.util import likelihood_dist_func, likelihood_func_visible, pose_vec_to_homogeneous
 from aicon.inference.ekf import update_ekf, predict_ekf_other_quantity, predict_ekf, \
     update_switching_ekf_triple_connection, update_switching_ekf, update_shifting_ekf
 from aicon.inference.util import gradient_preserving_clipping
-from aicon.math.util_3d import exponential_map_se3, homogeneous_transform_inverse
+from aicon.math.util_3d import homogeneous_transform_inverse
 from aicon.middleware.util_ros import wait_for_tf_frame
 from aicon.base_classes.connections import ActiveInterconnection
 
@@ -501,7 +501,7 @@ class DrawerPositionEstimator(EstimationComponent):
             print("Fallback on saved transform")
             H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
         print(f"pose_ee:\n{pose_ee}\nrelative_position:\n{relative_position}\nH_ee_to_cam:\n{H_ee_to_cam}")
-        H = torch.einsum("ij,jk->ik", exponential_map_se3(pose_ee), H_ee_to_cam)
+        H = torch.einsum("ij,jk->ik", pose_vec_to_homogeneous(pose_ee), H_ee_to_cam)
         if self.initial_drawer_pos is not None:
             initial_mu = torch.tensor(self.initial_drawer_pos, dtype=self.dtype, device=self.device)
         else:
@@ -528,7 +528,7 @@ class DrawerPositionEstimator(EstimationComponent):
                 sampled_mu = torch.distributions.multivariate_normal.MultivariateNormal(initial_mu, initial_Sigma).sample()
                 relative_pos = torch.einsum("ki,ij,j->k",
                                             homogeneous_transform_inverse(H_ee_to_cam),
-                                            homogeneous_transform_inverse(exponential_map_se3(pose_ee)),
+                                            homogeneous_transform_inverse(pose_vec_to_homogeneous(pose_ee)),
                                             torch.cat([sampled_mu, torch.ones(1, dtype=sampled_mu.dtype,
                                                                                    device=sampled_mu.device)]))[:3]
                 likelihood = likelihood_func_visible(pose_ee, sampled_mu, H_ee_to_cam)
@@ -601,6 +601,7 @@ class DrawerPositionEstimator(EstimationComponent):
 
             # attempt to integrate measurement
             if torch.all(torch.isnan(relative_position_in_CF_drawer)):
+                print("Measurement is NaN, skipping EKF update but still computing gradient")
                 # we are mocking a measurement to determine current simulated gradient
                 mock_relative_position_in_CF_drawer = - c_cam(mu, pose_ee,
                                                               torch.zeros_like(relative_position_in_CF_drawer)).detach()
@@ -613,6 +614,7 @@ class DrawerPositionEstimator(EstimationComponent):
                                                                    likelihood_existent_measurement,
                                                                    outlier_rejection_treshold=0.0)
             else:
+                print("Integrating actual measurement")
                 # just integrate measurement
                 mu_new, Sigma_new = update_switching_ekf_triple_connection(c_cam, mu, Sigma, pose_ee,
                                                                    uncertainty_ee,
@@ -620,7 +622,7 @@ class DrawerPositionEstimator(EstimationComponent):
                                                                    R_meas,
                                                                    R_add,
                                                                    likelihood_existent_measurement,
-                                                                   outlier_rejection_treshold=0.5)
+                                                                   outlier_rejection_treshold=None)
             # increase uncertainty if we received a good measurement when we should not have or vice versa
             measurement_not_integrated = torch.equal(mu, mu_new)
             if measurement_not_integrated and likelihood_existent_measurement > 0.5:

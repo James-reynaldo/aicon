@@ -11,8 +11,8 @@ import numpy as np
 
 from aicon.base_classes.connections import ActiveInterconnection
 from aicon.base_classes.components import SensorComponent
-from aicon.drawer_tutorial.util import get_sine_of_angles
-from aicon.math.util_3d import exponential_map_se3, homogeneous_transform_inverse
+from aicon.drawer_tutorial.util import get_sine_of_angles, pose_vec_to_homogeneous
+from aicon.math.util_3d import homogeneous_transform_inverse
 
 
 class DrawerPoseSenser(SensorComponent):
@@ -80,6 +80,7 @@ class EEPoseSensor(SensorComponent):
             bool: True if measurements were successfully obtained.
         """
         ee_pos_np = self.sim_env_pointer.env.get_ee_pose()
+        # print(f"EEPS obtained ee_pos: {ee_pos_np}")
         curr_sim_time = self.sim_env_pointer.get_sim_time()
         self.timestamp = torch.tensor(curr_sim_time)
         self.quantities["ee_pos_meas"] = torch.tensor(ee_pos_np, dtype=self.dtype, device=self.device)
@@ -115,11 +116,17 @@ class BearingSensor(SensorComponent):
         relative_pos_in_cf_drawer = torch.einsum(
             "ki,ij,j->k",
             homogeneous_transform_inverse(H_ee_to_cam),
-            homogeneous_transform_inverse(exponential_map_se3(ee_pose_t)),
+            homogeneous_transform_inverse(pose_vec_to_homogeneous(ee_pose_t)),
             torch.cat([drawer_pos_t, torch.ones(1, dtype=drawer_pos_t.dtype, device=drawer_pos_t.device)]),
         )[:3]
 
         self.timestamp = torch.tensor(curr_sim_time)
+        # print timestamped raw inputs and relative position for mismatch debugging
+        # print(f"[BS drawer_pos: {drawer_pos_t}]")
+        # print(f"[BearingSensor t={_ts}] relative_pos_in_cf_drawer(raw): {_rel}")
+        # print(f"[BearingSensor t={_ts}] H_ee_to_cam: {_h}")
+        # also print the H_ee_to_cam used by the sensor so we can detect frame mismatches
+        # store processed sine-of-angles bearing for estimator use
         self.quantities["relative_position_in_CF_drawer"] = get_sine_of_angles(relative_pos_in_cf_drawer)
         return True
 
