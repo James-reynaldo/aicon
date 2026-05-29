@@ -286,12 +286,12 @@ class DrawerCameraEEConnection(ActiveInterconnection):
                                         homogeneous_transform_inverse(pose_vec_to_homogeneous(pose_ee)),
                                         torch.cat([position_drawer, torch.ones(1, dtype=position_drawer.dtype, device=position_drawer.device)]))[:3]
             only_angles_sin_pred = get_sine_of_angles(relative_pos)
-            # print(f"DCEC Position: {(position_drawer)}")
+            print(f"DCEC Position drawer: {(position_drawer)}")
             # print(f"DCEC Pose EE: {(pose_ee)}")
             # print(f"DCEC relative_pos: {(relative_pos)}")
             # print(f"DCEC Relative position in CF drawer: {(relative_position_in_CF_drawer)}")
             # print(f"DCEC only angles sin pred: {(only_angles_sin_pred)}")
-            # print(f"DCEC residual: {(relative_position_in_CF_drawer - only_angles_sin_pred)}")
+            print(f"DCEC residual: {(relative_position_in_CF_drawer - only_angles_sin_pred)}")
             # angles should be the same, dist of the measured point is always set for unit length because unknown (RGB)
             return relative_position_in_CF_drawer - only_angles_sin_pred
 
@@ -323,8 +323,7 @@ class VisibleEEDrawerConnection(ActiveInterconnection):
                 dtype=position_drawer.dtype,
                 device=position_drawer.device,
             )
-            likelihood = likelihood_func_visible(pose_ee, position_drawer_mod, H_ee_to_cam)
-            print(f"VEDC likelihood: {likelihood}")
+            likelihood = likelihood_func_visible(pose_ee, position_drawer, H_ee_to_cam)
             return likelihood - likelihood_visible_drawer # produced by VisibleEStimator
 
         return connection_func

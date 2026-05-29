@@ -122,7 +122,7 @@ class BearingSensor(SensorComponent):
 
         self.timestamp = torch.tensor(curr_sim_time)
         # print timestamped raw inputs and relative position for mismatch debugging
-        # print(f"[BS drawer_pos: {drawer_pos_t}]")
+        print(f"[BS drawer_pos: {drawer_pos_t}]")
         # print(f"[BearingSensor t={_ts}] relative_pos_in_cf_drawer(raw): {_rel}")
         # print(f"[BearingSensor t={_ts}] H_ee_to_cam: {_h}")
         # also print the H_ee_to_cam used by the sensor so we can detect frame mismatches

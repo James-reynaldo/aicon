@@ -26,7 +26,7 @@ def setup_env(device_type, initial_qpos=None):
         has_offscreen_renderer=False,
         ignore_done=True,
         use_camera_obs=False,
-        render_camera="agentview",
+        render_camera="robot0_eye_in_hand",
         horizon=100,
         control_freq=30,
         controller_configs=suite.load_controller_config(default_controller="OSC_POSITION"),
@@ -54,9 +54,9 @@ def main(device, env, rec_save_path=None):
     cabinet_position = env_obs["CabinetObject_pos"]
     cabinet_orientation = quat2mat(env_obs["CabinetObject_quat"])
 
-    print(f"\nCabinet position from obs: {cabinet_position}")
-    print(f"Cabinet orientation matrix from obs:\n{cabinet_orientation}")
-    print(f"Initial robot joint state: {env_obs['robot0_joint_pos']}")
+    # print(f"\nCabinet position from obs: {cabinet_position}")
+    # print(f"Cabinet orientation matrix from obs:\n{cabinet_orientation}")
+    # print(f"Initial robot joint state: {env_obs['robot0_joint_pos']}")
 
     # setup aicon
     component_building_functions, connection_building_functions, frame_rates = (
@@ -78,13 +78,15 @@ def main(device, env, rec_save_path=None):
         action = np.concatenate(
             [curr_commanded_vel.cpu().numpy(), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
         )
+       # action = np.zeros(4, dtype=np.float64)
 
-        obs, rew, done, info = env.step(action)
+        # obs, rew, done, info = env.step(action)
 
         # Print current drawer position estimate from the estimator (if available)
         drawer_comp = components.get("DrawerPosEstimator")
         if drawer_comp is not None:
             drawer_pos_est = drawer_comp.quantities.get("position_drawer", None)
+            drawer_uncertainty = drawer_comp.quantities.get("uncertainty_drawer", None)
             if drawer_pos_est is not None:
                 try:
                     # Convert torch tensor to numpy for readable printing
@@ -104,7 +106,7 @@ def main(device, env, rec_save_path=None):
                     rp = rel_pos_meas.cpu().numpy()
                 except Exception:
                     rp = rel_pos_meas
-                # print(f"Bearing measurement at t={curr_t:.3f}: {rp}")
+                # print(f"Processed bearing (sine-of-angles) at t={curr_t:.3f}: {rp}")
 
         vis_comp = components.get("VisibleEstimator")
         if vis_comp is not None:
@@ -129,8 +131,8 @@ def main(device, env, rec_save_path=None):
         # print(f"Robot joint state at t={curr_t:.3f}: {obs['robot0_joint_pos']}")
 
         # Print success state and joint info
-        if done:
-            print("\n*** SUCCESS! Drawer opened. ***\n")
+        # if done:
+        #     print("\n*** SUCCESS! Drawer opened. ***\n")
 
         curr_t += env.control_timestep
         env.render()
@@ -141,9 +143,10 @@ def run_demo():
     initial_panda_qpos = np.array([-0.2, 0.2, 0.1, -2.0, 0.0, 1.5, 0.7])
     # initial_panda_qpos = np.array([ -0.2,  4.45131868e-01,  2.15620724e-03,
     #                                 -2.37699886e+00, -0.5,  3.12045433e+00,  8.77754819e-01])
-    initial_panda_qpos[4] += np.pi / 2.0 + 0.1 # rotate the arm 90 degrees about the y axis
-    initial_panda_qpos[1] += np.pi / 4.0  # rotate the arm 90 degrees about the y axis
+    initial_panda_qpos[4] += np.pi / 2.0 - 0.1  # rotate the arm 90 degrees about the y axis
+    initial_panda_qpos[1] += np.pi / 4.0 - 0.1 # rotate the arm 90 degrees about the y axis
     initial_panda_qpos[0] -= np.pi / 8.0
+    initial_panda_qpos[6] -= np.pi /2
     # initial_panda_qpos = None
 
     # Pass the initial pose to the setup function

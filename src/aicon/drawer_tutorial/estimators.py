@@ -535,6 +535,8 @@ class DrawerPositionEstimator(EstimationComponent):
                 dist = relative_pos[2]
             initial_mu = sampled_mu
             initial_Sigma = initial_Sigma * 2.0
+        # Override with hard-coded initial drawer position (requested)
+        # initial_mu = torch.tensor([-0.01042636, 0.13032206, 1.00388733], dtype=self.dtype, device=self.device)
         self.quantities["position_drawer"] = initial_mu
         self.quantities["uncertainty_drawer"] = initial_Sigma
         return True
@@ -668,6 +670,7 @@ class DrawerPositionEstimator(EstimationComponent):
             if time_since_hand_change[0] < 0.5 and time_since_hand_change[1] == 0 and likelihood_grasped_drawer != 0.0:
                 # possibly in the process of loosing grasp
                 Sigma_new = Sigma_new + torch.eye(3, dtype=self.dtype, device=self.device) * dt
+            # print(f"new position: {mu_new}")
             return (mu_new, Sigma_new), (mu_new, Sigma_new)
 
         return f_func, ["position_drawer", "uncertainty_drawer"], ["position_drawer", "uncertainty_drawer"]
