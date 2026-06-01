@@ -92,7 +92,10 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                        ),
         "VisibleEstimator": lambda mockbuild: VisibleEstimator("VisibleEstimator",
                                        connections={k: connection_builders[k] for k in
-                                            ("VisibleLikelihood",)},
+                                            (
+                                            "VisibleLikelihood",
+                                            "ProjectiveGeometry",
+                                             )},
                                        device=torch.device("cpu"),
                                        dtype=torch.double, mockbuild=mockbuild,
                                        **estimator_params.get("visible", {})),

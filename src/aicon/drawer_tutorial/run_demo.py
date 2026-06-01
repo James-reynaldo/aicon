@@ -29,7 +29,7 @@ def setup_env(device_type, initial_qpos=None):
         render_camera="robot0_eye_in_hand",
         horizon=100,
         control_freq=30,
-        controller_configs=suite.load_controller_config(default_controller="OSC_POSITION"),
+        controller_configs=suite.load_controller_config(default_controller="OSC_POSE"),
         initial_qpos=initial_qpos,
     )
 
@@ -68,19 +68,22 @@ def main(device, env, rec_save_path=None):
 
     # Start sim
     curr_t = 0
+    counter = 0
     while True:
-        action, grasp = input2action(
-            device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
-        )
+        
         run_component_sequence(components, torch.tensor(curr_t))
         curr_commanded_vel = gripper_velo.quantities["action_velo_ee"]
         curr_commanded_gripper = gripper_component.quantities["gripper_activation"]
         action = np.concatenate(
-            [curr_commanded_vel.cpu().numpy(), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
+            [curr_commanded_vel.cpu().numpy(), np.zeros(3), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
         )
-       # action = np.zeros(4, dtype=np.float64)
 
-        # obs, rew, done, info = env.step(action)
+        # action, grasp = input2action(
+        #     device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
+        # )
+        # action = np.zeros(4, dtype=np.float64)
+
+        obs, rew, done, info = env.step(action)
 
         # Print current drawer position estimate from the estimator (if available)
         drawer_comp = components.get("DrawerPosEstimator")
@@ -116,7 +119,7 @@ def main(device, env, rec_save_path=None):
                     vl = vis_like.cpu().numpy()
                 except Exception:
                     vl = vis_like
-                # print(f"Visibility likelihood at t={curr_t:.3f}: {vl}")
+                print(f"Visibility likelihood at t={curr_t:.3f}: {vl}")
 
         grasp_comp = components.get("GraspLikelihoodEstimator")
         if grasp_comp is not None:
@@ -140,13 +143,8 @@ def main(device, env, rec_save_path=None):
 
 def run_demo():
     # Define the desired initial joint positions for the Panda robot (7 joints)
-    initial_panda_qpos = np.array([-0.2, 0.2, 0.1, -2.0, 0.0, 1.5, 0.7])
-    # initial_panda_qpos = np.array([ -0.2,  4.45131868e-01,  2.15620724e-03,
-    #                                 -2.37699886e+00, -0.5,  3.12045433e+00,  8.77754819e-01])
-    initial_panda_qpos[4] += np.pi / 2.0 - 0.1  # rotate the arm 90 degrees about the y axis
-    initial_panda_qpos[1] += np.pi / 4.0 - 0.1 # rotate the arm 90 degrees about the y axis
-    initial_panda_qpos[0] -= np.pi / 8.0
-    initial_panda_qpos[6] -= np.pi /2
+    initial_panda_qpos = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
+
     # initial_panda_qpos = None
 
     # Pass the initial pose to the setup function

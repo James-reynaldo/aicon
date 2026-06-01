@@ -471,6 +471,7 @@ class DrawerOpenEnv(SingleArmEnv):
         # Apply custom initial joint positions if provided
         if self.custom_initial_qpos is not None:
             self.robots[0].set_robot_joint_positions(self.custom_initial_qpos)
+            self.robots[0].controller.update_initial_joints(np.array(self.custom_initial_qpos))
 
     def _check_success(self):
         """
