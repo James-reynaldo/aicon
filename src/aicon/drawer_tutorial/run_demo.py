@@ -109,7 +109,7 @@ def main(device, env, rec_save_path=None):
                         du = drawer_uncertainty
                 except Exception:
                     du = drawer_uncertainty
-                print(f"Drawer uncertainty at t={curr_t:.3f}: {du}")
+                # print(f"Drawer uncertainty at t={curr_t:.3f}: {du}")
         # Print camera bearing measurement and likelihoods for debugging
         bearing_comp = components.get("BearingSensor")
         if bearing_comp is not None:
@@ -139,7 +139,7 @@ def main(device, env, rec_save_path=None):
                     gl = grasp_like.cpu().numpy()
                 except Exception:
                     gl = grasp_like
-                # print(f"Grasp likelihood at t={curr_t:.3f}: {gl}")
+                print(f"Grasp likelihood at t={curr_t:.3f}: {gl}")
 
         # print(f"Robot joint state at t={curr_t:.3f}: {obs['robot0_joint_pos']}")
 
