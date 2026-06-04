@@ -162,6 +162,7 @@ class DistGraspHandConnection(ActiveInterconnection):
     def define_implicit_connection_function(self):
 
         def connection_func(distance_ee_drawer, uncertainty_dist, likelihood_grasped_drawer, gripper_activation, ee_force_mag_meas):
+            print(f"Distance EE-Drawer: {distance_ee_drawer}")
             dist_relevance = (1 - torch.sigmoid((distance_ee_drawer[1]-0.5) * 5)) * torch.clip(torch.exp(-(uncertainty_dist - 0.2) * 20), max=1.0)
             expected_dist = torch.sum(distance_ee_drawer) + uncertainty_dist
             likelihood_given_dist = torch.exp(-expected_dist * 4) * dist_relevance

@@ -65,6 +65,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                            "GraspedDrawerKinematics",
                                         #    "GraspedLikelihood",
                                            "VisibleLikelihood",
+                                           "E[dist]",
                                            )},
                                                              device=torch.device("cpu"),
                                                              dtype=torch.double, mockbuild=mockbuild,

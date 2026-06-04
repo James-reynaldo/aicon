@@ -276,7 +276,7 @@ class GraspedEstimator(EstimationComponent):
             Returns:
                 tuple: Updated grasp likelihood
             """
-            innovation = c_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, ee_force_mag_meas, gripper_activation)
+            innovation = c_func(distance_ee_drawer, uncertainty_dist, likelihood_grasped_drawer, gripper_activation, ee_force_mag_meas)
             new_likelihood = likelihood_grasped_drawer + innovation
             new_likelihood = gradient_preserving_clipping(new_likelihood, self.clip_min, self.clip_max)
             return (new_likelihood), (new_likelihood)
@@ -744,6 +744,7 @@ class DistEEDrawerEstimator(EstimationComponent):
             innovation = c_func(distance_ee_drawer, pose_ee, position_drawer)
             new_dist = distance_ee_drawer + innovation
             uncertainty = torch.sum(torch.trace(uncertainty_drawer)) + torch.sum(torch.trace(uncertainty_ee))
+            print(f"new distance: {new_dist}")
             return (new_dist, uncertainty), (new_dist, uncertainty)
 
         return f_func, ["distance_ee_drawer", "uncertainty_dist"], ["distance_ee_drawer", "uncertainty_dist"]
