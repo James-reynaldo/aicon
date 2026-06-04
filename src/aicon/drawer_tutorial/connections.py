@@ -147,9 +147,8 @@ class DistGraspHandConnection(ActiveInterconnection):
             low_likelihood_threshold: float = 0.1,
             gripper_activation_threshold: float = 0.5,
             small_likelihood_value: float = 1e-8):
-        super().__init__(name, {"likelihood_grasped_drawer": (1,), "pose_ee": (6,), "position_drawer": (3,),
-                    "uncertainty_ee": (6, 6), "uncertainty_drawer": (3, 3),
-                    "gripper_activation": (1,), "ee_force_mag_meas": (1,)}, dtype=dtype,
+        super().__init__(name, {"distance_ee_drawer": (2,), "uncertainty_dist": (1,),
+                    "likelihood_grasped_drawer": (1,), "gripper_activation": (1,), "ee_force_mag_meas": (1,)}, dtype=dtype,
                 device=device, mockbuild=mockbuild,)
         # expose internal hyperparameters as instance attributes so they can be swept
         self.dist_decay = dist_decay
@@ -162,21 +161,10 @@ class DistGraspHandConnection(ActiveInterconnection):
 
     def define_implicit_connection_function(self):
 
-        def connection_func(likelihood_grasped_drawer, pose_ee, position_drawer, ee_force_mag_meas, gripper_activation, distance_ee_drawer=None, uncertainty_dist=None, uncertainty_ee=None, uncertainty_drawer=None):
-            if distance_ee_drawer is not None and distance_ee_drawer.numel() >= 2:
-                dist_val = distance_ee_drawer[0]
-                angular_term = distance_ee_drawer[1]
-            else:
-                dist_val = torch.norm(position_drawer - pose_ee[:3])
-                angular_term = 0.0
-            if uncertainty_dist is None:
-                if uncertainty_ee is not None and uncertainty_drawer is not None:
-                    uncertainty_dist = torch.sum(torch.trace(uncertainty_ee)) + torch.sum(torch.trace(uncertainty_drawer))
-                else:
-                    uncertainty_dist = torch.tensor(0.0, dtype=likelihood_grasped_drawer.dtype, device=likelihood_grasped_drawer.device)
-            dist_relevance = (1 - torch.sigmoid((angular_term - 0.5) * 5)) * torch.clip(torch.exp(-(uncertainty_dist - 0.2) * 20), max=1.0)
-            expected_dist = dist_val + uncertainty_dist
-            likelihood_given_dist = torch.exp(-expected_dist * self.dist_decay) * dist_relevance
+        def connection_func(distance_ee_drawer, uncertainty_dist, likelihood_grasped_drawer, gripper_activation, ee_force_mag_meas):
+            dist_relevance = (1 - torch.sigmoid((distance_ee_drawer[1]-0.5) * 5)) * torch.clip(torch.exp(-(uncertainty_dist - 0.2) * 20), max=1.0)
+            expected_dist = torch.sum(distance_ee_drawer) + uncertainty_dist
+            likelihood_given_dist = torch.exp(-expected_dist * 4) * dist_relevance
             innovation_from_dist = likelihood_given_dist - likelihood_grasped_drawer
 
             # hand and force measurements are only relevant if we are close (otherwise from other source...)
