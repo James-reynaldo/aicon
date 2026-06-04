@@ -100,6 +100,16 @@ def main(device, env, rec_save_path=None):
                 except Exception:
                     dp = drawer_pos_est
                 # print(f"Drawer estimate at t={curr_t:.3f}: {dp}")
+            if drawer_uncertainty is not None:
+                try:
+                    # Convert torch tensor to numpy for readable printing
+                    if hasattr(drawer_uncertainty, "cpu"):
+                        du = drawer_uncertainty.cpu().numpy()
+                    else:
+                        du = drawer_uncertainty
+                except Exception:
+                    du = drawer_uncertainty
+                print(f"Drawer uncertainty at t={curr_t:.3f}: {du}")
         # Print camera bearing measurement and likelihoods for debugging
         bearing_comp = components.get("BearingSensor")
         if bearing_comp is not None:
@@ -119,7 +129,7 @@ def main(device, env, rec_save_path=None):
                     vl = vis_like.cpu().numpy()
                 except Exception:
                     vl = vis_like
-                print(f"Visibility likelihood at t={curr_t:.3f}: {vl}")
+                # print(f"Visibility likelihood at t={curr_t:.3f}: {vl}")
 
         grasp_comp = components.get("GraspLikelihoodEstimator")
         if grasp_comp is not None:

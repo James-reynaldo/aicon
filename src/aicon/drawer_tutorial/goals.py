@@ -59,4 +59,44 @@ class DrawerOpenViaJointGoal(Goal):
             return cost, cost
         return goal_func
 
+class DrawerUncertaintyGoal(Goal):
+    """
+    Goal to reduce uncertainty in the drawer position.
+    The goal is considered fulfilled when the uncertainty is minimized.
+    """
 
+    def __init__(self, is_active: bool, dtype: Union[torch.dtype, None] = None,
+                 device: Union[torch.device, None] = None, mockbuild: bool = False):
+        """
+        Initialize the DrawerUncertaintyGoal.
+        
+        Args:
+            is_active: Whether the goal is active
+            dtype: Data type for computations
+            device: Device for computations
+            mockbuild: Whether to run in mock build mode
+        """
+        super().__init__(name="MakeDrawerPositionCertain", is_active=is_active,
+                        mockbuild=mockbuild, device=device, dtype=dtype)
+
+    def define_goal_cost_function(self):
+        """
+        Define the cost function for reducing drawer position uncertainty.
+        
+        Returns:
+            function: Cost function that takes uncertainty_drawer as input
+        """
+        def goal_func(uncertainty_drawer):
+            """
+            Calculate the cost based on the trace of the uncertainty matrix.
+            
+            Args:
+                uncertainty_drawer: Uncertainty matrix for drawer position
+            
+            Returns:
+                tuple: (cost, cost) where cost is the trace of the uncertainty matrix
+            """
+            cost = torch.sum(torch.trace(uncertainty_drawer))
+            print(f"Uncertainty cost: {cost.item()}")
+            return cost, cost
+        return goal_func

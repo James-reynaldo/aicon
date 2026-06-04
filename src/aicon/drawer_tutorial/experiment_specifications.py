@@ -3,13 +3,14 @@ import torch
 from aicon.drawer_tutorial.actions import GripperAction, VeloEEAction
 from aicon.drawer_tutorial.connections import build_connections
 from aicon.drawer_tutorial.estimators import (
+    DistEEDrawerEstimator,
     DrawerPositionEstimator,
     EEPoseEstimator,
     GraspedEstimator,
     VisibleEstimator,
     KinematicJointEstimator,
 )
-from aicon.drawer_tutorial.goals import DrawerOpenViaJointGoal
+from aicon.drawer_tutorial.goals import DrawerOpenViaJointGoal, DrawerUncertaintyGoal
 from aicon.drawer_tutorial.sensors import BearingSensor, DrawerPoseSenser, EEForceSensor, EEPoseSensor
 
 
@@ -62,7 +63,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                            "DirectMeasurement",
                                            "ProjectiveGeometry",
                                            "GraspedDrawerKinematics",
-                                           "GraspedLikelihood",
+                                        #    "GraspedLikelihood",
                                            "VisibleLikelihood",
                                            )},
                                                              device=torch.device("cpu"),
@@ -76,11 +77,23 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                                                     "GraspedDrawerKinematics",
                                                                                                     "DrawerKinematics",
                                                                                                     "VisibleLikelihood",
+                                                                                                    "E[dist]",
                                                                                                  )},
+                                                                            # goals={"MakeDrawerPositionCertain": lambda d, t,
+                                                                            #                                 mockbuild=False: DrawerUncertaintyGoal(
+                                                                            #     is_active=True, dtype=t, device=d,
+                                                                            #     mockbuild=mockbuild)},                        
                                                                         device=torch.device("cpu"),
                                                                         dtype=torch.double, mockbuild=mockbuild,
                                                                         **estimator_params.get("drawer_position", {}),
                                                                         ),
+        "DistanceEstimator": lambda mockbuild: DistEEDrawerEstimator("DistanceEstimator",
+                                                                     connections={k: connection_builders[k] for k in
+                                                                                  ("E[dist]",
+                                                                                   "GraspedLikelihood",
+                                                                                   )},
+                                                                     device=torch.device("cpu"),
+                                                                     dtype=torch.double, mockbuild=mockbuild),
         "GraspLikelihoodEstimator": lambda mockbuild: GraspedEstimator("GraspLikelihoodEstimator",
                                                                        connections={k: connection_builders[k] for k in
                                                                                     ("GraspedDrawerKinematics",

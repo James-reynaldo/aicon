@@ -37,6 +37,7 @@ def build_connections(connection_params: dict = None):
     """
     connection_params = connection_params or {}
     connections = {"GraspedDrawerKinematics": lambda device, dtype, mockbuild: EEDrawerGraspedConnection("GraspedDrawerKinematics", device=device, dtype=dtype, mockbuild=mockbuild),
+                    "E[dist]": lambda device, dtype, mockbuild: DistDrawerEEConnection("E[dist]", device=device, dtype=dtype, mockbuild=mockbuild),
                    "GraspedLikelihood": lambda device, dtype, mockbuild:DistGraspHandConnection("GraspedLikelihood", device=device, dtype=dtype, mockbuild=mockbuild, **connection_params.get("DistGraspHandConnection", {})),
                    "ForwardKinematics": lambda device, dtype, mockbuild:EEVeloConnection("ForwardKinematics", device=device, dtype=dtype, mockbuild=mockbuild),
                    "DirectMeasurement": lambda device, dtype, mockbuild:EEProprioConnection("DirectMeasurement", device=device, dtype=dtype, mockbuild=mockbuild),
@@ -102,6 +103,36 @@ class DistDrawerEEConnection(ActiveInterconnection): # unused for sim
 
         return connection_func
 
+class DistDrawerEEConnection(ActiveInterconnection):
+    """
+    Active Interconnection between the distance estimator, the end-effector and the drawer position.
+    The distance estimates should correspond to the distance between the end-effector and the drawer position.
+    """
+    def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False):
+        super().__init__(name, {"pose_ee": (6,), "uncertainty_ee": (6, 6), "position_drawer": (3,),
+                                "uncertainty_drawer": (3, 3), "distance_ee_drawer": (2,), "uncertainty_dist": (1,)}, dtype=dtype,
+                         device=device, mockbuild=mockbuild,)
+
+    def define_implicit_connection_function(self):
+        H_grasping_offset = torch.eye(4, dtype=self.dtype, device=self.device)
+        H_grasping_offset[:3, 3] = torch.tensor(RELATIVE_PREGRASPING_POINT_DRAWER, dtype=self.dtype, device=self.device)
+        R_optimal_grasping = torch.tensor(
+            GRASPING_ORIENTATION_DRAWER, dtype=self.dtype, device=self.device)
+
+        def connection_func(distance_ee_drawer, pose_ee, position_drawer):
+            H_ee = pose_vec_to_homogeneous(pose_ee)
+            grasping_point = torch.einsum("ij,jk->ik", H_ee, H_grasping_offset)[:3, 3]
+            relative_vector = grasping_point - position_drawer
+            dist_mean = torch.norm(relative_vector)
+            # dist to good grasp pose also depends on a good orientation, but it only matters once we are somewhat close
+            R_diff = torch.einsum("ij,jk->ik", H_ee[:3, :3], torch.transpose(R_optimal_grasping, 0, 1))
+            angle_to_good_grasp_pose = torch.abs(
+                torch.arccos(torch.clip((torch.trace(R_diff) - 1) / 2.0, -0.9999, 0.9999))) * 0.0
+            dist_combined = torch.cat([dist_mean.unsqueeze(0), angle_to_good_grasp_pose.unsqueeze(0)])
+            return dist_combined - distance_ee_drawer
+
+        return connection_func
+
 
 class DistGraspHandConnection(ActiveInterconnection):
     """
@@ -109,16 +140,17 @@ class DistGraspHandConnection(ActiveInterconnection):
     The likelihood is high if the end-effector is close to the drawer and the force measurements are high.
     """
     def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False,
-                 dist_decay: float = 4.0,
-                 close_dist_threshold: float = 0.05,
-                 force_threshold: float = 10.0,
-                 ft_noise_offset: float = 5.0,
-                 low_likelihood_threshold: float = 0.1,
-                 gripper_activation_threshold: float = 0.5,
-                 small_likelihood_value: float = 1e-8):
-        super().__init__(name, {"pose_ee": (6,), "position_drawer": (3,), "uncertainty_drawer": (3,3), "uncertainty_ee": (6,6),
-                                "likelihood_grasped_drawer": (1,), "gripper_activation": (1,), "ee_force_mag_meas": (1,)}, dtype=dtype,
-                         device=device, mockbuild=mockbuild,)
+            dist_decay: float = 4.0,
+            close_dist_threshold: float = 0.05,
+            force_threshold: float = 10.0,
+            ft_noise_offset: float = 5.0,
+            low_likelihood_threshold: float = 0.1,
+            gripper_activation_threshold: float = 0.5,
+            small_likelihood_value: float = 1e-8):
+        super().__init__(name, {"likelihood_grasped_drawer": (1,), "pose_ee": (6,), "position_drawer": (3,),
+                    "uncertainty_ee": (6, 6), "uncertainty_drawer": (3, 3),
+                    "gripper_activation": (1,), "ee_force_mag_meas": (1,)}, dtype=dtype,
+                device=device, mockbuild=mockbuild,)
         # expose internal hyperparameters as instance attributes so they can be swept
         self.dist_decay = dist_decay
         self.close_dist_threshold = close_dist_threshold
@@ -130,9 +162,21 @@ class DistGraspHandConnection(ActiveInterconnection):
 
     def define_implicit_connection_function(self):
 
-        def connection_func(likelihood_grasped_drawer, pose_ee, position_drawer, ee_force_mag_meas, gripper_activation):
-            expected_dist = torch.norm(position_drawer - pose_ee[:3])
-            likelihood_given_dist = torch.exp(-expected_dist * self.dist_decay)
+        def connection_func(likelihood_grasped_drawer, pose_ee, position_drawer, ee_force_mag_meas, gripper_activation, distance_ee_drawer=None, uncertainty_dist=None, uncertainty_ee=None, uncertainty_drawer=None):
+            if distance_ee_drawer is not None and distance_ee_drawer.numel() >= 2:
+                dist_val = distance_ee_drawer[0]
+                angular_term = distance_ee_drawer[1]
+            else:
+                dist_val = torch.norm(position_drawer - pose_ee[:3])
+                angular_term = 0.0
+            if uncertainty_dist is None:
+                if uncertainty_ee is not None and uncertainty_drawer is not None:
+                    uncertainty_dist = torch.sum(torch.trace(uncertainty_ee)) + torch.sum(torch.trace(uncertainty_drawer))
+                else:
+                    uncertainty_dist = torch.tensor(0.0, dtype=likelihood_grasped_drawer.dtype, device=likelihood_grasped_drawer.device)
+            dist_relevance = (1 - torch.sigmoid((angular_term - 0.5) * 5)) * torch.clip(torch.exp(-(uncertainty_dist - 0.2) * 20), max=1.0)
+            expected_dist = dist_val + uncertainty_dist
+            likelihood_given_dist = torch.exp(-expected_dist * self.dist_decay) * dist_relevance
             innovation_from_dist = likelihood_given_dist - likelihood_grasped_drawer
 
             # hand and force measurements are only relevant if we are close (otherwise from other source...)
@@ -286,12 +330,12 @@ class DrawerCameraEEConnection(ActiveInterconnection):
                                         homogeneous_transform_inverse(pose_vec_to_homogeneous(pose_ee)),
                                         torch.cat([position_drawer, torch.ones(1, dtype=position_drawer.dtype, device=position_drawer.device)]))[:3]
             only_angles_sin_pred = get_sine_of_angles(relative_pos)
-            print(f"DCEC Position drawer: {(position_drawer)}")
+            # print(f"DCEC Position drawer: {(position_drawer)}")
             # print(f"DCEC Pose EE: {(pose_ee)}")
             # print(f"DCEC relative_pos: {(relative_pos)}")
             # print(f"DCEC Relative position in CF drawer: {(relative_position_in_CF_drawer)}")
             # print(f"DCEC only angles sin pred: {(only_angles_sin_pred)}")
-            print(f"DCEC residual: {(relative_position_in_CF_drawer - only_angles_sin_pred)}")
+            # print(f"DCEC residual: {(relative_position_in_CF_drawer - only_angles_sin_pred)}")
             # angles should be the same, dist of the measured point is always set for unit length because unknown (RGB)
             return relative_position_in_CF_drawer - only_angles_sin_pred
 

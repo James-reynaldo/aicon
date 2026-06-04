@@ -262,21 +262,21 @@ class GraspedEstimator(EstimationComponent):
         """
         c_func = self.connections["GraspedLikelihood"].c_func
 
-        def f_func(likelihood_grasped_drawer, pose_ee, position_drawer, ee_force_mag_meas, gripper_activation):
+        def f_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, ee_force_mag_meas, gripper_activation):
             """
             Update the grasp likelihood estimate.
             
             Args:
                 likelihood_grasped_drawer: Current grasp likelihood
-                ee_pose: Current end-effector pose
-                drawer_position: Current drawer position
+                distance_ee_drawer: Current estimated distance and orientation between EE and drawer
+                uncertainty_dist: Current uncertainty in the distance estimate
                 gripper_activation: Current gripper activation
                 ee_force_mag_meas: Current end-effector force magnitude
             
             Returns:
                 tuple: Updated grasp likelihood
             """
-            innovation = c_func(likelihood_grasped_drawer, pose_ee, position_drawer, ee_force_mag_meas, gripper_activation)
+            innovation = c_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, ee_force_mag_meas, gripper_activation)
             new_likelihood = likelihood_grasped_drawer + innovation
             new_likelihood = gradient_preserving_clipping(new_likelihood, self.clip_min, self.clip_max)
             return (new_likelihood), (new_likelihood)
@@ -682,7 +682,78 @@ class DrawerPositionEstimator(EstimationComponent):
         self.quantities["position_drawer"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
         self.quantities["uncertainty_drawer"] = torch.zeros(self.state_dim, self.state_dim, dtype=self.dtype,
                                                             device=self.device)
+
+
+class DistEEDrawerEstimator(EstimationComponent):
+    """
+    Estimator for the distance between end-effector and drawer.
+    This component estimates the 2D distance (position and orientation) between
+    the end-effector and the drawer.
+    """
+    state_dim = 2
+
+    def initialize_quantities(self):
+        """
+        Initialize the quantities using distance measurements.
         
+        Returns:
+            bool: True if initialization was successful, False otherwise
+        """
+        c_dist = self.connections["E[dist]"]
+        with c_dist.lock:
+            if c_dist.connected_quantities_initialized["position_drawer"] and c_dist.connected_quantities_initialized[
+                "pose_ee"]:
+                pose_ee = c_dist.connected_quantities["pose_ee"]
+                position_drawer = c_dist.connected_quantities["position_drawer"]
+                uncertainty_ee = c_dist.connected_quantities["uncertainty_ee"]
+                uncertainty_drawer = c_dist.connected_quantities["uncertainty_drawer"]
+                c_func = c_dist.c_func
+            else:
+                return False
+        self.quantities["distance_ee_drawer"] = c_func(torch.zeros(self.state_dim, dtype=self.dtype, device=self.device),
+                                                                pose_ee, position_drawer)
+        self.quantities["uncertainty_dist"] = torch.sum(torch.trace(uncertainty_drawer)) + torch.sum(torch.trace(uncertainty_ee))
+        return True
+
+    def define_estimation_function_f(self):
+        """
+        Define the estimation function for end-effector to drawer distance.
+        
+        Returns:
+            tuple: (f_func, input_names, output_names)
+            f_func: Function that updates the distance estimate
+            input_names: Names of input quantities
+            output_names: Names of output quantities
+        """
+        c_func = self.connections["E[dist]"].c_func
+
+        def f_func(distance_ee_drawer, pose_ee, uncertainty_ee, position_drawer, uncertainty_drawer):
+            """
+            Update the distance estimate.
+            
+            Args:
+                distance_ee_drawer: Current distance estimate
+                pose_ee: Current end-effector pose
+                uncertainty_ee: End-effector uncertainty
+                position_drawer: Current drawer position
+                uncertainty_drawer: Drawer position uncertainty
+            
+            Returns:
+                tuple: Updated distance and uncertainty estimates
+            """
+            innovation = c_func(distance_ee_drawer, pose_ee, position_drawer)
+            new_dist = distance_ee_drawer + innovation
+            uncertainty = torch.sum(torch.trace(uncertainty_drawer)) + torch.sum(torch.trace(uncertainty_ee))
+            return (new_dist, uncertainty), (new_dist, uncertainty)
+
+        return f_func, ["distance_ee_drawer", "uncertainty_dist"], ["distance_ee_drawer", "uncertainty_dist"]
+
+    def initial_definitions(self):
+        """
+        Initialize the quantities for distance estimation.
+        """
+        self.quantities["distance_ee_drawer"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
+        self.quantities["uncertainty_dist"] = torch.zeros(1, dtype=self.dtype, device=self.device)       
 
 class VisibleEstimator(EstimationComponent):
     """

@@ -46,6 +46,9 @@ class VeloEEAction(ActionComponent):
         steepest_grad, timestamps, trace = self.get_steepest_gradient("action_velo_ee",
                                                                     time_threshold=self.timestamp - torch.ones_like(self.timestamp) * 2.0)
 
+        print("steepest_grad:", steepest_grad)
+        print("gradient trace:", trace)
+        # print("timestamps:", timestamps)
         t_part = self.perform_gradient_descent(last_action, steepest_grad)
 
         t_part = self.safety_limiting(t_part)
