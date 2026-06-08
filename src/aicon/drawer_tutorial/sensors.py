@@ -132,6 +132,7 @@ class BearingSensor(SensorComponent):
 
     def initial_definitions(self):
         self.quantities["relative_position_in_CF_drawer"] = torch.empty(self.state_dim, dtype=self.dtype, device=self.device)
+
 class EEForceSensor(SensorComponent):
     """
     Sensor for obtaining the end-effector force magnitude from the simulation environment.

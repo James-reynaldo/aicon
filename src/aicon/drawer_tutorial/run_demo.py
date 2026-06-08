@@ -66,6 +66,63 @@ def main(device, env, rec_save_path=None):
     gripper_component = components["GripperAction"]
     gripper_velo = components["EEVelocities"]
 
+    # Helper: map quantities to connection functions by inspecting connection function signatures
+    def _connections_for_quantity(quantity_name):
+        matches = []
+        for comp_name, comp in components.items():
+            conns = getattr(comp, "connections", {})
+            for conn_key, conn in conns.items():
+                try:
+                    func = conn.define_implicit_connection_function()
+                    code = getattr(func, "__code__", None)
+                    if code is not None:
+                        argcount = code.co_argcount
+                        argnames = code.co_varnames[:argcount]
+                    else:
+                        argnames = ()
+                except Exception:
+                    argnames = ()
+                if quantity_name in argnames:
+                    matches.append((comp_name, conn_key, conn.__class__.__name__))
+        return matches
+
+    def _connections_linking_quantities(q1, q2):
+        matches = []
+        for comp_name, comp in components.items():
+            conns = getattr(comp, "connections", {})
+            for conn_key, conn in conns.items():
+                try:
+                    quantity_names = list(conn.connected_quantities.keys())
+                except Exception:
+                    quantity_names = []
+                if q1 in quantity_names and q2 in quantity_names:
+                    matches.append((comp_name, conn_key, conn.__class__.__name__, quantity_names))
+        return matches
+
+    def _print_connection_pairs_for_trace(trace_list):
+        print("[conn-map] Mapping adjacent gradient-trace quantities to shared connections:")
+        for q1, q2 in zip(trace_list, trace_list[1:]):
+            found = _connections_linking_quantities(q1, q2)
+            if not found:
+                print(f"  {q1} -> {q2}: <no shared connection found>")
+            else:
+                print(f"  {q1} -> {q2}:")
+                for comp_name, conn_key, cls, quantity_names in found:
+                    print(f"    - component `{comp_name}` connection `{conn_key}` ({cls})")
+
+    # Example trace (from your gradient trace). Adjust if needed.
+    gradient_trace_example = [
+        "ReduceJointStateDifference",
+        "kinematic_joint",
+        "position_drawer",
+        "likelihood_grasped_drawer",
+        "uncertainty_dist",
+        "uncertainty_drawer",
+        "pose_ee",
+        "action_velo_ee",
+    ]
+    # _print_connection_pairs_for_trace(gradient_trace_example)
+
     # Start sim
     curr_t = 0
     counter = 0
@@ -81,7 +138,6 @@ def main(device, env, rec_save_path=None):
         # action, grasp = input2action(
         #     device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
         # )
-        # action = np.zeros(4, dtype=np.float64)
 
         obs, rew, done, info = env.step(action)
 
@@ -99,7 +155,7 @@ def main(device, env, rec_save_path=None):
                         dp = drawer_pos_est
                 except Exception:
                     dp = drawer_pos_est
-                # print(f"Drawer estimate at t={curr_t:.3f}: {dp}")
+                print(f"Drawer estimate at t={curr_t:.3f}: {dp}")
             if drawer_uncertainty is not None:
                 try:
                     # Convert torch tensor to numpy for readable printing
@@ -107,9 +163,10 @@ def main(device, env, rec_save_path=None):
                         du = drawer_uncertainty.cpu().numpy()
                     else:
                         du = drawer_uncertainty
+                    du_diag = np.diag(du)
                 except Exception:
-                    du = drawer_uncertainty
-                # print(f"Drawer uncertainty at t={curr_t:.3f}: {du}")
+                    du_diag = drawer_uncertainty
+                # print(f"Drawer uncertainty (diagonal) at t={curr_t:.3f}: {du_diag}")
         # Print camera bearing measurement and likelihoods for debugging
         bearing_comp = components.get("BearingSensor")
         if bearing_comp is not None:
@@ -139,7 +196,7 @@ def main(device, env, rec_save_path=None):
                     gl = grasp_like.cpu().numpy()
                 except Exception:
                     gl = grasp_like
-                print(f"Grasp likelihood at t={curr_t:.3f}: {gl}")
+                # print(f"Grasp likelihood at t={curr_t:.3f}: {gl}")
 
         # print(f"Robot joint state at t={curr_t:.3f}: {obs['robot0_joint_pos']}")
 

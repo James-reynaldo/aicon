@@ -97,7 +97,8 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                      dtype=torch.double, mockbuild=mockbuild),
         "GraspLikelihoodEstimator": lambda mockbuild: GraspedEstimator("GraspLikelihoodEstimator",
                                                                        connections={k: connection_builders[k] for k in
-                                                                                    ("GraspedDrawerKinematics",
+                                                                                    (
+                                                                                        "GraspedDrawerKinematics",
                                                                                      "GraspedLikelihood",
                                                                                      "DrawerKinematics",
                                                                                      )},

@@ -217,221 +217,6 @@ class EEPoseEstimator(EstimationComponent):
 #         self.quantities["uncertainty_drawer"] = torch.zeros(self.state_dim, self.state_dim, dtype=self.dtype,
 #                                                             device=self.device)
 
-
-class GraspedEstimator(EstimationComponent):
-    """
-    Estimator for the grasp state of the drawer.
-    This component estimates the likelihood that the drawer is currently grasped
-    by the end-effector.
-    """
-    state_dim = 1
-
-    def __init__(self, name: str, connections: Dict[str, ActiveInterconnection], goals: Union[None, Dict[str, Callable]] = None,
-                 dtype: Union[torch.dtype, None] = None, device: Union[torch.device, None] = None,
-                 mockbuild: bool = False, no_differentiation: bool = False,
-                 prevent_loops_in_differentiation: bool = True,
-                 max_length_differentiation_trace: Union[int, None] = None,
-                 initial_likelihood: float = 0.01,
-                 clip_min: float = 1e-10,
-                 clip_max: float = 0.9999999):
-        self.initial_likelihood = initial_likelihood
-        self.clip_min = clip_min
-        self.clip_max = clip_max
-        super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
-                         prevent_loops_in_differentiation, max_length_differentiation_trace)
-
-    def initialize_quantities(self):
-        """
-        Initialize the quantities for grasp state estimation.
-        
-        Returns:
-            bool: True if initialization was successful, False otherwise
-        """
-        self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_likelihood
-        return True
-
-    def define_estimation_function_f(self):
-        """
-        Define the estimation function for grasp state.
-        
-        Returns:
-            tuple: (f_func, input_names, output_names)
-            f_func: Function that updates the grasp likelihood
-            input_names: Names of input quantities
-            output_names: Names of output quantities
-        """
-        c_func = self.connections["GraspedLikelihood"].c_func
-
-        def f_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, ee_force_mag_meas, gripper_activation):
-            """
-            Update the grasp likelihood estimate.
-            
-            Args:
-                likelihood_grasped_drawer: Current grasp likelihood
-                distance_ee_drawer: Current estimated distance and orientation between EE and drawer
-                uncertainty_dist: Current uncertainty in the distance estimate
-                gripper_activation: Current gripper activation
-                ee_force_mag_meas: Current end-effector force magnitude
-            
-            Returns:
-                tuple: Updated grasp likelihood
-            """
-            innovation = c_func(distance_ee_drawer, uncertainty_dist, likelihood_grasped_drawer, gripper_activation, ee_force_mag_meas)
-            new_likelihood = likelihood_grasped_drawer + innovation
-            new_likelihood = gradient_preserving_clipping(new_likelihood, self.clip_min, self.clip_max)
-            return (new_likelihood), (new_likelihood)
-
-        return f_func, ["likelihood_grasped_drawer"], ["likelihood_grasped_drawer"]
-
-    def initial_definitions(self):
-        """
-        Initialize the quantities for grasp state estimation.
-        """
-        self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_likelihood
-class KinematicJointEstimator(EstimationComponent):
-    """
-    Estimator for the kinematic joint state of the drawer.
-    This component estimates the joint state (azimuth, elevation, state, initial_point)
-    of the drawer's kinematic model.
-    """
-    state_dim = 1 + 1 + 1 + 3   # azimuth elevation state initial_point
-
-    def __init__(self, name: str, connections: Dict[str, ActiveInterconnection], goals: Union[None, Dict[str, Callable]] = None,
-                 dtype: Union[torch.dtype, None] = None, device: Union[torch.device, None] = None,
-                 mockbuild: bool = False, no_differentiation: bool = False,
-                 prevent_loops_in_differentiation: bool = True,
-                 max_length_differentiation_trace: Union[int, None] = None,
-                 initial_rotation_xy : Union[float, None] = None,
-                 initial_uncertainty_scale : Union[float, None] = None,
-                 sample_init_mean : bool = False,
-                 grasped_noise: float = 0.002,
-                 ungrasped_noise: float = 0.001,
-                 axis_azimuth_process_noise: float = 0.001,
-                 axis_elevation_process_noise: float = 0.001,
-                 joint_process_noise: float = 0.2,
-                 anchor_process_noise: float = 1e-6,
-                 grasp_threshold: float = 0.2,
-                 grasp_floor: float = 0.2,
-                 covariance_alpha: float = 1.0):
-        """
-        Initialize the kinematic joint estimator.
-        
-        Args:
-            name: Name of the estimator
-            connections: Dictionary of connections
-            goals: Dictionary of goal functions
-            dtype: Data type for computations
-            device: Device for computations
-            mockbuild: Whether to run in mock build mode
-            no_differentiation: Whether to disable differentiation
-            prevent_loops_in_differentiation: Whether to prevent loops in differentiation
-            max_length_differentiation_trace: Maximum length of differentiation trace
-            initial_rotation_xy: Initial rotation in XY plane
-            initial_uncertainty_scale: Scale factor for initial uncertainty
-            sample_init_mean: Whether to sample initial mean
-        """
-        self.initial_rotation_xy = initial_rotation_xy
-        self.initial_uncertainty_scale = initial_uncertainty_scale
-        self.sample_init_mean = sample_init_mean
-        self.grasped_noise = grasped_noise
-        self.ungrasped_noise = ungrasped_noise
-        self.axis_azimuth_process_noise = axis_azimuth_process_noise
-        self.axis_elevation_process_noise = axis_elevation_process_noise
-        self.joint_process_noise = joint_process_noise
-        self.anchor_process_noise = anchor_process_noise
-        self.grasp_threshold = grasp_threshold
-        self.grasp_floor = grasp_floor
-        self.covariance_alpha = covariance_alpha
-        super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
-                         prevent_loops_in_differentiation, max_length_differentiation_trace)
-
-    def initialize_quantities(self):
-        if not self.connections["DrawerKinematics"].connected_quantities_initialized["position_drawer"]:
-            return False
-        self.quantities["kinematic_joint"] = torch.zeros(self.state_dim, device=self.device, dtype=self.dtype)
-        self.quantities["kinematic_joint"][1] = - torch.pi / 2 # is always on the xy plane
-        # TODO: this a bit arbitrary, but we can change it later
-        self.quantities["kinematic_joint"][0] = - torch.pi / 2 * 0.5
-        # self.quantities["kinematic_joint"][0] = - torch.pi / 2 
-
-        self.quantities["kinematic_joint"][3:6] = self.connections["DrawerKinematics"].connected_quantities["position_drawer"]
-        self.quantities["uncertainty_joint"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device)
-        self.quantities["uncertainty_joint"][3:6,3:6] = self.connections["DrawerKinematics"].connected_quantities["uncertainty_drawer"]
-
-        return True
-
-    def define_estimation_function_f(self):
-        """
-        Define the estimation function for kinematic joint state.
-        
-        Returns:
-            tuple: (f_func, input_names, output_names)
-            f_func: Function that updates the joint state estimate
-            input_names: Names of input quantities
-            output_names: Names of output quantities
-        """
-        c_func = self.connections["DrawerKinematics"].c_func
-
-        def forward_joint(kinematic_joint):
-            """
-            Forward model for joint state.
-            
-            Args:
-                kinematic_joint: Current joint state estimate
-            
-            Returns:
-                tensor: Predicted joint state
-            """
-            return kinematic_joint  # Joints do not naturally move by themselves
-
-        R_additive_grasped = torch.eye(3, device=self.device, dtype=self.dtype) * self.grasped_noise
-        R_additive_ungrasped = torch.eye(3, device=self.device, dtype=self.dtype) * self.ungrasped_noise
-        Q_diag = torch.tensor([self.axis_azimuth_process_noise, self.axis_elevation_process_noise, self.joint_process_noise, self.anchor_process_noise, self.anchor_process_noise, self.anchor_process_noise], device=self.device, dtype=self.dtype) # important hyperparameter
-
-        def f_func(kinematic_joint, uncertainty_joint, position_drawer, uncertainty_drawer, likelihood_grasped_drawer, dt):
-            """
-            Update the joint state estimate.
-            
-            Args:
-                kinematic_joint: Current joint state estimate
-                uncertainty_joint: Current joint uncertainty
-                position_drawer: Current drawer position
-                uncertainty_drawer: Drawer position uncertainty
-                likelihood_grasped_drawer: Likelihood of drawer being grasped
-                dt: Time step
-            
-            Returns:
-                tuple: Updated joint state and uncertainty estimates
-            """
-            # starting from 0.5 grasp likelihood we do not want to integrate any starting point info anymore
-            # but instead only about the joint
-            unlikelihood_grasped = gradient_preserving_clipping((self.grasp_threshold - likelihood_grasped_drawer) / self.grasp_threshold, 0.0000000001, 1.0).unsqueeze(0)
-            likelihood_grasped = gradient_preserving_clipping(likelihood_grasped_drawer, self.grasp_floor, 1.0).unsqueeze(0) # important also
-            shift_diagonal_matrix = torch.diag(torch.cat([likelihood_grasped, likelihood_grasped, likelihood_grasped,
-                                                          unlikelihood_grasped, unlikelihood_grasped, unlikelihood_grasped]))
-            shift_diagonal_matrix = gradient_preserving_clipping(shift_diagonal_matrix, 0.0, 1.0)
-            mu_new, Sigma_new = predict_ekf(forward_joint, kinematic_joint, uncertainty_joint,
-                                            shift_diagonal_matrix * Q_diag * dt)
-            # azi, ele, and state are highly influenced when grasped, initial point else
-            R_additive = R_additive_grasped * likelihood_grasped + R_additive_ungrasped * unlikelihood_grasped
-            mu_new, Sigma_new = update_shifting_ekf(c_func, mu_new, Sigma_new, position_drawer, uncertainty_drawer, R_additive, shift_diagonal_matrix, outlier_rejection_treshold = 1.0)
-            if self.covariance_alpha < 1.0:
-                Sigma_blockdiag = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
-                                              torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
-                Sigma_new = (1 - self.covariance_alpha) * Sigma_new + self.covariance_alpha * Sigma_blockdiag
-            return (mu_new, Sigma_new), (mu_new, Sigma_new)
-
-        return f_func, ["kinematic_joint", "uncertainty_joint"], ["kinematic_joint", "uncertainty_joint"]
-
-    def initial_definitions(self):
-        """
-        Initialize the quantities for kinematic joint estimation.
-        """
-        self.quantities["kinematic_joint"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
-        self.quantities["uncertainty_joint"] = torch.zeros(self.state_dim, self.state_dim, dtype=self.dtype,
-                                                            device=self.device)
-
-
 class DrawerPositionEstimator(EstimationComponent):
     """
     Estimator for the drawer position.
@@ -500,7 +285,7 @@ class DrawerPositionEstimator(EstimationComponent):
         except (AssertionError, AttributeError):
             print("Fallback on saved transform")
             H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
-        print(f"pose_ee:\n{pose_ee}\nrelative_position:\n{relative_position}\nH_ee_to_cam:\n{H_ee_to_cam}")
+        # print(f"pose_ee:\n{pose_ee}\nrelative_position:\n{relative_position}\nH_ee_to_cam:\n{H_ee_to_cam}")
         H = torch.einsum("ij,jk->ik", pose_vec_to_homogeneous(pose_ee), H_ee_to_cam)
         if self.initial_drawer_pos is not None:
             initial_mu = torch.tensor(self.initial_drawer_pos, dtype=self.dtype, device=self.device)
@@ -508,7 +293,7 @@ class DrawerPositionEstimator(EstimationComponent):
             if torch.all(torch.isnan(relative_position)):
                 return False
             if self.initial_depth is None:
-                relative_position[2] = 0.8  # prior for where it should be
+                relative_position[2] = 0.2  # prior for where it should be
             else:
                 relative_position[2] = self.initial_depth
             initial_mu = torch.einsum("ij,j->i", H, torch.concat(
@@ -537,6 +322,7 @@ class DrawerPositionEstimator(EstimationComponent):
             initial_Sigma = initial_Sigma * 2.0
         # Override with hard-coded initial drawer position (requested)
         # initial_mu = torch.tensor([-0.01042636, 0.13032206, 1.00388733], dtype=self.dtype, device=self.device)
+        # initial_Sigma = torch.eye(3, dtype=self.dtype, device=self.device) * 0.05
         self.quantities["position_drawer"] = initial_mu
         self.quantities["uncertainty_drawer"] = initial_Sigma
         return True
@@ -599,9 +385,10 @@ class DrawerPositionEstimator(EstimationComponent):
             R_add = 5 * (torch.eye(3, dtype=dtype, device=device) * additive_noise_visibility +
                          torch.eye(3, dtype=dtype, device=device) * additive_noise_distance)
             R_meas = torch.eye(3, dtype=dtype, device=device) * self.meas_noise_factor
-            likelihood_existent_measurement = likelihood_visible_drawer * (1.0 - likelihood_grasped_drawer.detach())
+            likelihood_existent_measurement = likelihood_visible_drawer * (1.0 - likelihood_grasped_drawer.detach()) # Probability that usable visual meas exists
 
             # attempt to integrate measurement
+            print(f"[uncertainty-debug] likelihood_visible_drawer={likelihood_visible_drawer.item()}, likelihood_grasped_drawer={likelihood_grasped_drawer.item()}, likelihood_existent_measurement={likelihood_existent_measurement.item()}, relative_position_is_nan={torch.all(torch.isnan(relative_position_in_CF_drawer)).item()}")
             if torch.all(torch.isnan(relative_position_in_CF_drawer)):
                 print("Measurement is NaN, skipping EKF update but still computing gradient")
                 # we are mocking a measurement to determine current simulated gradient
@@ -627,6 +414,7 @@ class DrawerPositionEstimator(EstimationComponent):
                                                                    outlier_rejection_treshold=None)
             # increase uncertainty if we received a good measurement when we should not have or vice versa
             measurement_not_integrated = torch.equal(mu, mu_new)
+            print(f"[uncertainty-debug] measurement_integrated={not measurement_not_integrated}, Sigma_trace_before={torch.trace(Sigma).item()}, Sigma_trace_after={torch.trace(Sigma_new).item()}")
             if measurement_not_integrated and likelihood_existent_measurement > 0.5:
                 # visual measurements while grasped can be deceiving due to the hand being similarly blue
                 if likelihood_grasped_drawer < 0.1:
@@ -656,6 +444,8 @@ class DrawerPositionEstimator(EstimationComponent):
                 tuple: Updated position and uncertainty estimates
             """
             forward_noise = likelihood_grasped_drawer * 0.15 * dt + 0.005 * dt
+            # Disable forward noise for test
+            # forward_noise = 0.0
             mu_new, Sigma_new = predict_ekf(forward_drawer, position_drawer, uncertainty_drawer,
                                             torch.eye(3, dtype=self.dtype, device=self.device) * forward_noise)
             Sigma_new, mu_new = process_visual_measurement(Sigma_new, likelihood_grasped_drawer,
@@ -670,7 +460,6 @@ class DrawerPositionEstimator(EstimationComponent):
             if time_since_hand_change[0] < 0.5 and time_since_hand_change[1] == 0 and likelihood_grasped_drawer != 0.0:
                 # possibly in the process of loosing grasp
                 Sigma_new = Sigma_new + torch.eye(3, dtype=self.dtype, device=self.device) * dt
-            # print(f"new position: {mu_new}")
             return (mu_new, Sigma_new), (mu_new, Sigma_new)
 
         return f_func, ["position_drawer", "uncertainty_drawer"], ["position_drawer", "uncertainty_drawer"]
@@ -682,7 +471,6 @@ class DrawerPositionEstimator(EstimationComponent):
         self.quantities["position_drawer"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
         self.quantities["uncertainty_drawer"] = torch.zeros(self.state_dim, self.state_dim, dtype=self.dtype,
                                                             device=self.device)
-
 
 class DistEEDrawerEstimator(EstimationComponent):
     """
@@ -744,7 +532,6 @@ class DistEEDrawerEstimator(EstimationComponent):
             innovation = c_func(distance_ee_drawer, pose_ee, position_drawer)
             new_dist = distance_ee_drawer + innovation
             uncertainty = torch.sum(torch.trace(uncertainty_drawer)) + torch.sum(torch.trace(uncertainty_ee))
-            print(f"new distance: {new_dist}")
             return (new_dist, uncertainty), (new_dist, uncertainty)
 
         return f_func, ["distance_ee_drawer", "uncertainty_dist"], ["distance_ee_drawer", "uncertainty_dist"]
@@ -754,7 +541,147 @@ class DistEEDrawerEstimator(EstimationComponent):
         Initialize the quantities for distance estimation.
         """
         self.quantities["distance_ee_drawer"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
-        self.quantities["uncertainty_dist"] = torch.zeros(1, dtype=self.dtype, device=self.device)       
+        self.quantities["uncertainty_dist"] = torch.zeros(1, dtype=self.dtype, device=self.device)     
+
+class GraspedEstimator(EstimationComponent):
+    """
+    Estimator for the grasp state of the drawer.
+    This component estimates the likelihood that the drawer is currently grasped
+    by the end-effector.
+    """
+    state_dim = 1
+
+    def __init__(self, name: str, connections: Dict[str, ActiveInterconnection], goals: Union[None, Dict[str, Callable]] = None,
+                 dtype: Union[torch.dtype, None] = None, device: Union[torch.device, None] = None,
+                 mockbuild: bool = False, no_differentiation: bool = False,
+                 prevent_loops_in_differentiation: bool = True,
+                 max_length_differentiation_trace: Union[int, None] = None,
+                 initial_likelihood: float = 0.01,
+                 initially_grasped: bool = False,
+                 clip_min: float = 1e-10,
+                 clip_max: float = 0.9999999):
+        # self.initial_likelihood = initial_likelihood
+        self.initially_grasped = initially_grasped
+        self.clip_min = clip_min
+        self.clip_max = clip_max
+        super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
+                         prevent_loops_in_differentiation, max_length_differentiation_trace)
+
+    def initialize_quantities(self):
+        """
+        Initialize the quantities for grasp state estimation.
+        
+        Returns:
+            bool: True if initialization was successful, False otherwise
+        """
+        # self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_likelihood
+        # return True
+        c_grasped = self.connections["GraspedLikelihood"]
+        with c_grasped.lock:
+            if c_grasped.connected_quantities_initialized["distance_ee_drawer"] and \
+                    c_grasped.connected_quantities_initialized["gripper_activation"] and \
+                    c_grasped.connected_quantities_initialized["ee_force_mag_meas"] and \
+                    c_grasped.connected_quantities_initialized["uncertainty_dist"]:
+                    # c_grasped.connected_quantities_initialized["time_since_hand_change"]:
+                distance_ee_drawer = c_grasped.connected_quantities["distance_ee_drawer"]
+                gripper_activation = c_grasped.connected_quantities["gripper_activation"]
+                ee_force_mag_meas = c_grasped.connected_quantities["ee_force_mag_meas"]
+                uncertainty_dist = c_grasped.connected_quantities["uncertainty_dist"]
+                # time_since_hand_change = c_grasped.connected_quantities["time_since_hand_change"]
+                c_func = c_grasped.c_func
+            else:
+                return False
+        if self.initially_grasped:
+            self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * 0.99
+            self.quantities["time_since_hand_change"] = torch.zeros(2, dtype=self.dtype, device=self.device)
+        else:
+            self.quantities["likelihood_grasped_drawer"] = torch.clip(
+                c_func(torch.tensor([0.05], dtype=self.dtype, device=self.device), distance_ee_drawer, uncertainty_dist,
+                       gripper_activation, torch.zeros(3, dtype=self.dtype, device=self.device),
+                       torch.zeros(2, dtype=self.dtype, device=self.device)), 0.02, 0.98)
+            self.quantities["time_since_hand_change"] = torch.zeros(2, dtype=self.dtype, device=self.device)
+            self.quantities["time_since_hand_change"][0] = 2.0
+        return True
+    def define_estimation_function_f(self):
+        """
+        Define the estimation function for grasp state.
+        
+        Returns:
+            tuple: (f_func, input_names, output_names)
+            f_func: Function that updates the grasp likelihood
+            input_names: Names of input quantities
+            output_names: Names of output quantities
+        """
+        c_func = self.connections["GraspedLikelihood"].c_func
+
+        # def f_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, ee_force_mag_meas, gripper_activation):
+        #     """
+        #     Update the grasp likelihood estimate.
+            
+        #     Args:
+        #         likelihood_grasped_drawer: Current grasp likelihood
+        #         distance_ee_drawer: Current estimated distance and orientation between EE and drawer
+        #         uncertainty_dist: Current uncertainty in the distance estimate
+        #         gripper_activation: Current gripper activation
+        #         ee_force_mag_meas: Current end-effector force magnitude
+            
+        #     Returns:
+        #         tuple: Updated grasp likelihood
+        #     """
+        #     innovation = c_func(distance_ee_drawer, uncertainty_dist, likelihood_grasped_drawer, gripper_activation, ee_force_mag_meas)
+        #     new_likelihood = likelihood_grasped_drawer + innovation
+        #     new_likelihood = gradient_preserving_clipping(new_likelihood, self.clip_min, self.clip_max)
+        #     return (new_likelihood), (new_likelihood)
+            
+        # return f_func, ["likelihood_grasped_drawer"], ["likelihood_grasped_drawer"]
+
+        def f_func(likelihood_grasped_drawer, distance_ee_drawer, gripper_activation, ee_force_mag_meas, uncertainty_dist, time_since_hand_change, dt):
+            """
+            Update the grasp likelihood estimate.
+            
+            Args:
+                likelihood_grasped_drawer: Current grasp likelihood
+                distance_ee_drawer: Current distance to drawer
+                gripper_activation: Current gripper activation
+                ee_force_mag_meas: Current end-effector force magnitude
+                uncertainty_dist: Current distance uncertainty
+                time_since_hand_change: Time since last hand state change
+                dt: Time step
+            
+            Returns:
+                tuple: Updated grasp likelihood
+            """
+            time_since_hand_change_new = torch.clone(time_since_hand_change).detach()
+            if gripper_activation > 0.5:
+                time_since_hand_change_new[0] = 0.0
+                time_since_hand_change_new[1] = dt + time_since_hand_change[1]
+            else:
+                time_since_hand_change_new[0] = time_since_hand_change[0] + dt
+                time_since_hand_change_new[1] = 0.0
+            force_magnitude = torch.norm(ee_force_mag_meas)
+            if (distance_ee_drawer[0] < 0.03 and uncertainty_dist < 0.25 and time_since_hand_change[0] > 1.0) or (gripper_activation > 0.5):
+                FT_tresh = torch.minimum(time_since_hand_change[1] * 0.75, torch.ones_like(time_since_hand_change[1]) * 2.25)
+                likelihood_from_hand_and_force = torch.clip(1 - torch.exp(-(force_magnitude - FT_tresh)), 0, 1) * gripper_activation
+                if (likelihood_grasped_drawer < 0.1) and (likelihood_from_hand_and_force < 0.1) and (gripper_activation > 0.5):
+                    likelihood_from_hand_and_force = (likelihood_from_hand_and_force.detach() -
+                                                   gripper_activation + gripper_activation.detach())
+            innovation = c_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, gripper_activation, ee_force_mag_meas, time_since_hand_change_new)
+            if innovation < - 0.05:
+                new_likelihood = likelihood_grasped_drawer + 0.1 * innovation   # slowly decide that it isnt grasped anymore
+            else:
+                new_likelihood = likelihood_grasped_drawer + innovation
+            new_likelihood = gradient_preserving_clipping(new_likelihood, self.clip_min, self.clip_max)
+            return (new_likelihood), (new_likelihood, time_since_hand_change_new)
+
+        return f_func, ["likelihood_grasped_drawer"], ["likelihood_grasped_drawer", "time_since_hand_change"]
+
+    def initial_definitions(self):
+        """
+        Initialize the quantities for grasp state estimation.
+        """
+        # self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_likelihood
+        self.quantities["likelihood_grasped_drawer"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
+        self.quantities["time_since_hand_change"] = torch.zeros(2, dtype=self.dtype, device=self.device)
 
 class VisibleEstimator(EstimationComponent):
     """
@@ -824,3 +751,155 @@ class VisibleEstimator(EstimationComponent):
         Initialize the quantities for visibility estimation.
         """
         self.quantities["likelihood_visible_drawer"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
+
+
+
+class KinematicJointEstimator(EstimationComponent):
+    """
+    Estimator for the kinematic joint state of the drawer.
+    This component estimates the joint state (azimuth, elevation, state, initial_point)
+    of the drawer's kinematic model.
+    """
+    state_dim = 1 + 1 + 1 + 3   # azimuth elevation state initial_point
+
+    def __init__(self, name: str, connections: Dict[str, ActiveInterconnection], goals: Union[None, Dict[str, Callable]] = None,
+                 dtype: Union[torch.dtype, None] = None, device: Union[torch.device, None] = None,
+                 mockbuild: bool = False, no_differentiation: bool = False,
+                 prevent_loops_in_differentiation: bool = True,
+                 max_length_differentiation_trace: Union[int, None] = None,
+                 initial_rotation_xy : Union[float, None] = None,
+                 initial_uncertainty_scale : Union[float, None] = None,
+                 sample_init_mean : bool = False,
+                 grasped_noise: float = 0.002,
+                 ungrasped_noise: float = 0.001,
+                 axis_azimuth_process_noise: float = 0.001,
+                 axis_elevation_process_noise: float = 0.001,
+                 joint_process_noise: float = 0.2,
+                 anchor_process_noise: float = 1e-6,
+                 grasp_threshold: float = 0.2,
+                 grasp_floor: float = 0.000000000001,
+                 covariance_alpha: float = 1.0):
+        """
+        Initialize the kinematic joint estimator.
+        
+        Args:
+            name: Name of the estimator
+            connections: Dictionary of connections
+            goals: Dictionary of goal functions
+            dtype: Data type for computations
+            device: Device for computations
+            mockbuild: Whether to run in mock build mode
+            no_differentiation: Whether to disable differentiation
+            prevent_loops_in_differentiation: Whether to prevent loops in differentiation
+            max_length_differentiation_trace: Maximum length of differentiation trace
+            initial_rotation_xy: Initial rotation in XY plane
+            initial_uncertainty_scale: Scale factor for initial uncertainty
+            sample_init_mean: Whether to sample initial mean
+        """
+        self.initial_rotation_xy = initial_rotation_xy
+        self.initial_uncertainty_scale = initial_uncertainty_scale
+        self.sample_init_mean = sample_init_mean
+        self.grasped_noise = grasped_noise
+        self.ungrasped_noise = ungrasped_noise
+        self.axis_azimuth_process_noise = axis_azimuth_process_noise
+        self.axis_elevation_process_noise = axis_elevation_process_noise
+        self.joint_process_noise = joint_process_noise
+        self.anchor_process_noise = anchor_process_noise
+        self.grasp_threshold = grasp_threshold
+        self.grasp_floor = grasp_floor
+        self.covariance_alpha = covariance_alpha
+        super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
+                         prevent_loops_in_differentiation, max_length_differentiation_trace)
+
+    def initialize_quantities(self):
+        if not self.connections["DrawerKinematics"].connected_quantities_initialized["position_drawer"]:
+            return False
+        self.quantities["kinematic_joint"] = torch.zeros(self.state_dim, device=self.device, dtype=self.dtype)
+        self.quantities["kinematic_joint"][1] = - torch.pi / 2 # is always on the xy plane
+        if self.initial_rotation_xy is None:
+            self.quantities["kinematic_joint"][0] = - torch.pi / 2 * 0.5
+            pass
+        else:
+            # depends on rotation of robot to drawer cabinet
+            self.quantities["kinematic_joint"][0] = self.initial_rotation_xy
+        self.quantities["kinematic_joint"][3:6] = self.connections["DrawerKinematics"].connected_quantities["position_drawer"]
+        if self.initial_uncertainty_scale is None:
+            self.quantities["uncertainty_joint"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device)
+        else:
+            self.quantities["uncertainty_joint"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_uncertainty_scale
+        self.quantities["uncertainty_joint"][3:6,3:6] = self.connections["DrawerKinematics"].connected_quantities["uncertainty_drawer"]
+        if self.sample_init_mean:
+            init_angles = torch.distributions.multivariate_normal.MultivariateNormal(self.quantities["kinematic_joint"][0:2],self.quantities["uncertainty_joint"][:2,:2]).sample()
+            self.quantities["kinematic_joint"][0:2] = init_angles
+        return True
+
+    def define_estimation_function_f(self):
+        """
+        Define the estimation function for kinematic joint state.
+        
+        Returns:
+            tuple: (f_func, input_names, output_names)
+            f_func: Function that updates the joint state estimate
+            input_names: Names of input quantities
+            output_names: Names of output quantities
+        """
+        c_func = self.connections["DrawerKinematics"].c_func
+
+        def forward_joint(kinematic_joint):
+            """
+            Forward model for joint state.
+            
+            Args:
+                kinematic_joint: Current joint state estimate
+            
+            Returns:
+                tensor: Predicted joint state
+            """
+            return kinematic_joint  # Joints do not naturally move by themselves
+
+        R_additive_grasped = torch.eye(3, device=self.device, dtype=self.dtype) * self.grasped_noise
+        R_additive_ungrasped = torch.eye(3, device=self.device, dtype=self.dtype) * self.ungrasped_noise
+        Q_diag = torch.tensor([self.axis_azimuth_process_noise, self.axis_elevation_process_noise, self.joint_process_noise, self.anchor_process_noise, self.anchor_process_noise, self.anchor_process_noise], device=self.device, dtype=self.dtype) # important hyperparameter
+
+        def f_func(kinematic_joint, uncertainty_joint, position_drawer, uncertainty_drawer, likelihood_grasped_drawer, dt):
+            """
+            Update the joint state estimate.
+            
+            Args:
+                kinematic_joint: Current joint state estimate
+                uncertainty_joint: Current joint uncertainty
+                position_drawer: Current drawer position
+                uncertainty_drawer: Drawer position uncertainty
+                likelihood_grasped_drawer: Likelihood of drawer being grasped
+                dt: Time step
+            
+            Returns:
+                tuple: Updated joint state and uncertainty estimates
+            """
+            # starting from 0.5 grasp likelihood we do not want to integrate any starting point info anymore
+            # but instead only about the joint
+            unlikelihood_grasped = gradient_preserving_clipping((self.grasp_threshold - likelihood_grasped_drawer) / self.grasp_threshold, 0.0000000001, 1.0)
+            likelihood_grasped = gradient_preserving_clipping(likelihood_grasped_drawer, self.grasp_floor, 1.0) # important also
+            shift_diagonal_matrix = torch.diag(torch.cat([likelihood_grasped, likelihood_grasped, likelihood_grasped,
+                                                          unlikelihood_grasped, unlikelihood_grasped, unlikelihood_grasped]))
+            shift_diagonal_matrix = gradient_preserving_clipping(shift_diagonal_matrix, 0.0, 1.0)
+            mu_new, Sigma_new = predict_ekf(forward_joint, kinematic_joint, uncertainty_joint,
+                                            shift_diagonal_matrix * Q_diag * dt)
+            # azi, ele, and state are highly influenced when grasped, initial point else
+            R_additive = R_additive_grasped * likelihood_grasped + R_additive_ungrasped * unlikelihood_grasped
+            mu_new, Sigma_new = update_shifting_ekf(c_func, mu_new, Sigma_new, position_drawer, uncertainty_drawer, R_additive, shift_diagonal_matrix, outlier_rejection_treshold = 1.0)
+            if self.covariance_alpha < 1.0:
+                Sigma_blockdiag = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
+                                              torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
+                Sigma_new = (1 - self.covariance_alpha) * Sigma_new + self.covariance_alpha * Sigma_blockdiag
+            return (mu_new, Sigma_new), (mu_new, Sigma_new)
+
+        return f_func, ["kinematic_joint", "uncertainty_joint"], ["kinematic_joint", "uncertainty_joint"]
+
+    def initial_definitions(self):
+        """
+        Initialize the quantities for kinematic joint estimation.
+        """
+        self.quantities["kinematic_joint"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
+        self.quantities["uncertainty_joint"] = torch.zeros(self.state_dim, self.state_dim, dtype=self.dtype,
+                                                            device=self.device)  
