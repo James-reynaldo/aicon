@@ -26,7 +26,7 @@ def setup_env(device_type, initial_qpos=None):
         has_offscreen_renderer=False,
         ignore_done=True,
         use_camera_obs=False,
-        render_camera="robot0_eye_in_hand",
+        render_camera="agentview", #'frontview', 'birdview', 'agentview', 'sideview', 'robot0_robotview', 'robot0_eye_in_hand'
         horizon=100,
         control_freq=30,
         controller_configs=suite.load_controller_config(default_controller="OSC_POSE"),
@@ -155,7 +155,7 @@ def main(device, env, rec_save_path=None):
                         dp = drawer_pos_est
                 except Exception:
                     dp = drawer_pos_est
-                print(f"Drawer estimate at t={curr_t:.3f}: {dp}")
+                # print(f"Drawer estimate at t={curr_t:.3f}: {dp}")
             if drawer_uncertainty is not None:
                 try:
                     # Convert torch tensor to numpy for readable printing
@@ -196,7 +196,7 @@ def main(device, env, rec_save_path=None):
                     gl = grasp_like.cpu().numpy()
                 except Exception:
                     gl = grasp_like
-                # print(f"Grasp likelihood at t={curr_t:.3f}: {gl}")
+                # print(f"Grasp likelihood: {gl}")
 
         # print(f"Robot joint state at t={curr_t:.3f}: {obs['robot0_joint_pos']}")
 

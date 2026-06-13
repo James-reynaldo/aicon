@@ -77,6 +77,7 @@ class EEPoseEstimator(EstimationComponent):
             # Work around
             delta = c_proprio(mu_new, ee_pos_meas).detach()
             mu_new = mu_new + delta
+            # print(f"[EEPoseEstimator] EE pose estimate: {mu_new}")
             return (mu_new, Sigma_new), (mu_new, Sigma_new)
 
         return f_func, ["pose_ee", "uncertainty_ee"], ["pose_ee", "uncertainty_ee"]
@@ -231,7 +232,7 @@ class DrawerPositionEstimator(EstimationComponent):
                  prevent_loops_in_differentiation: bool = True,
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_depth : Union[float, None] = None,
-                 initial_uncertainty_scale : Union[float, None] = None,
+                 initial_uncertainty_scale : Union[float, None] = 100,
                  sample_init_mean : bool = False,
                  meas_noise_factor : float = 0.025,
                  initial_drawer_pos : Union[None, Iterable] = None):
@@ -293,7 +294,7 @@ class DrawerPositionEstimator(EstimationComponent):
             if torch.all(torch.isnan(relative_position)):
                 return False
             if self.initial_depth is None:
-                relative_position[2] = 0.2  # prior for where it should be
+                relative_position[2] = 0.8  # prior for where it should be
             else:
                 relative_position[2] = self.initial_depth
             initial_mu = torch.einsum("ij,j->i", H, torch.concat(
@@ -388,7 +389,7 @@ class DrawerPositionEstimator(EstimationComponent):
             likelihood_existent_measurement = likelihood_visible_drawer * (1.0 - likelihood_grasped_drawer.detach()) # Probability that usable visual meas exists
 
             # attempt to integrate measurement
-            print(f"[uncertainty-debug] likelihood_visible_drawer={likelihood_visible_drawer.item()}, likelihood_grasped_drawer={likelihood_grasped_drawer.item()}, likelihood_existent_measurement={likelihood_existent_measurement.item()}, relative_position_is_nan={torch.all(torch.isnan(relative_position_in_CF_drawer)).item()}")
+            # print(f"[uncertainty-debug] likelihood_visible_drawer={likelihood_visible_drawer.item()}, likelihood_grasped_drawer={likelihood_grasped_drawer.item()}, likelihood_existent_measurement={likelihood_existent_measurement.item()}, relative_position_is_nan={torch.all(torch.isnan(relative_position_in_CF_drawer)).item()}")
             if torch.all(torch.isnan(relative_position_in_CF_drawer)):
                 print("Measurement is NaN, skipping EKF update but still computing gradient")
                 # we are mocking a measurement to determine current simulated gradient
@@ -414,7 +415,7 @@ class DrawerPositionEstimator(EstimationComponent):
                                                                    outlier_rejection_treshold=None)
             # increase uncertainty if we received a good measurement when we should not have or vice versa
             measurement_not_integrated = torch.equal(mu, mu_new)
-            print(f"[uncertainty-debug] measurement_integrated={not measurement_not_integrated}, Sigma_trace_before={torch.trace(Sigma).item()}, Sigma_trace_after={torch.trace(Sigma_new).item()}")
+            # print(f"[uncertainty-debug] measurement_integrated={not measurement_not_integrated}, Sigma_trace_before={torch.trace(Sigma).item()}, Sigma_trace_after={torch.trace(Sigma_new).item()}")
             if measurement_not_integrated and likelihood_existent_measurement > 0.5:
                 # visual measurements while grasped can be deceiving due to the hand being similarly blue
                 if likelihood_grasped_drawer < 0.1:
@@ -776,7 +777,7 @@ class KinematicJointEstimator(EstimationComponent):
                  axis_elevation_process_noise: float = 0.001,
                  joint_process_noise: float = 0.2,
                  anchor_process_noise: float = 1e-6,
-                 grasp_threshold: float = 0.2,
+                 grasp_threshold: float = 0.5,
                  grasp_floor: float = 0.000000000001,
                  covariance_alpha: float = 1.0):
         """
@@ -883,15 +884,19 @@ class KinematicJointEstimator(EstimationComponent):
             shift_diagonal_matrix = torch.diag(torch.cat([likelihood_grasped, likelihood_grasped, likelihood_grasped,
                                                           unlikelihood_grasped, unlikelihood_grasped, unlikelihood_grasped]))
             shift_diagonal_matrix = gradient_preserving_clipping(shift_diagonal_matrix, 0.0, 1.0)
+            # print(f"[kinematic_joint] shift_diagonal_matrix: {shift_diagonal_matrix.diag()}")
             mu_new, Sigma_new = predict_ekf(forward_joint, kinematic_joint, uncertainty_joint,
                                             shift_diagonal_matrix * Q_diag * dt)
             # azi, ele, and state are highly influenced when grasped, initial point else
             R_additive = R_additive_grasped * likelihood_grasped + R_additive_ungrasped * unlikelihood_grasped
             mu_new, Sigma_new = update_shifting_ekf(c_func, mu_new, Sigma_new, position_drawer, uncertainty_drawer, R_additive, shift_diagonal_matrix, outlier_rejection_treshold = 1.0)
-            if self.covariance_alpha < 1.0:
-                Sigma_blockdiag = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
-                                              torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
-                Sigma_new = (1 - self.covariance_alpha) * Sigma_new + self.covariance_alpha * Sigma_blockdiag
+            # if self.covariance_alpha < 1.0:
+            #     Sigma_blockdiag = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
+            #                                   torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
+            #     Sigma_new = (1 - self.covariance_alpha) * Sigma_new + self.covariance_alpha * Sigma_blockdiag
+            Sigma_new = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
+                                          torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
+            print(f"[kinematic_joint] mu_new: {mu_new}")
             return (mu_new, Sigma_new), (mu_new, Sigma_new)
 
         return f_func, ["kinematic_joint", "uncertainty_joint"], ["kinematic_joint", "uncertainty_joint"]

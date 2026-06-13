@@ -150,6 +150,7 @@ def get_default_connection_params():
             "ft_noise_offset": 5.0,
             "low_likelihood_threshold": 0.1,
             "gripper_activation_threshold": 0.5,
+            "uncertainty_dist_threshold": 0.5,
             "small_likelihood_value": 1e-8,
         }
     }

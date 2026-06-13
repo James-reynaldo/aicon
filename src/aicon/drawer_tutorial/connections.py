@@ -19,8 +19,8 @@ from loguru import logger
 GRASPING_ORIENTATION_DRAWER = [[-0.19754394844475631210, -0.01502825724660820927, 0.98017882977298076419],
                 [-0.20747924073575563231, -0.97658970333946726328, -0.05678832084272268654],
                 [ 0.95808598336199168877, -0.21458494869060928956, 0.18980133616634375926,]]
-RELATIVE_PREGRASPING_POINT_DRAWER = [0.0, 0.0, 0]
-RELATIVE_GRASPED_POINT_DRAWER = [0.005, -0.005, 0.155]
+RELATIVE_PREGRASPING_POINT_DRAWER = [0.005,-0.005, 0.0]
+RELATIVE_GRASPED_POINT_DRAWER = [0.0, 0.0, 0.0] #[0.005, -0.005, 0.155]
 GRAVITY_ACC = 9.8067
 FT_COM = [-0.001054, -0.016209, 0.090570] #[-0.022491, -0.006024, 0.076837]
 FT_BIAS = [0, 0, 0]
@@ -142,6 +142,7 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             ft_noise_offset: float = 5.0,
             low_likelihood_threshold: float = 0.1,
             gripper_activation_threshold: float = 0.5,
+            uncertainty_dist_threshold: float = 0.25,
             small_likelihood_value: float = 1e-8):
         super().__init__(name, {"distance_ee_drawer": (2,), "uncertainty_dist": (1,),
                     "likelihood_grasped_drawer": (1,), "gripper_activation": (1,), "ee_force_mag_meas": (1,),
@@ -154,6 +155,7 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
         self.ft_noise_offset = ft_noise_offset
         self.low_likelihood_threshold = low_likelihood_threshold
         self.gripper_activation_threshold = gripper_activation_threshold
+        self.uncertainty_dist_threshold = uncertainty_dist_threshold
         self.small_likelihood_value = small_likelihood_value
 
     def define_implicit_connection_function(self):
@@ -192,11 +194,13 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             likelihood_given_dist = torch.exp(-expected_dist * 4) * dist_relevance
             innovation_from_dist = likelihood_given_dist - likelihood_given_uncertainty.detach()
 
-            force_magnitude = ee_force_mag_meas.squeeze()
+            force_magnitude = torch.norm(ee_force_mag_meas)
+            print(f"Distance EE-Drawer: {distance_ee_drawer[0].item()}, Uncertainty: {uncertainty_dist.item(),}, Force magnitude: {force_magnitude.item()}")
             # hand and force measurements are only relevant if we are close (otherwise from other source...)
-            if (distance_ee_drawer[0] < 0.03 and uncertainty_dist < 0.25 and time_since_hand_change[0] > 1.0) or (gripper_activation > 0.5):
+            if (distance_ee_drawer[0] < 0.03 and uncertainty_dist < self.uncertainty_dist_threshold and time_since_hand_change[0] > 1.0) or (gripper_activation > 0.5):
                 # under 2N is just FT noise
                 FT_tresh = torch.minimum(time_since_hand_change[1] * 0.75, torch.ones_like(time_since_hand_change[1]) * 2.25)
+                # print(f"FT threshold: {FT_tresh.item()}")
                 likelihood_from_hand_and_force = torch.clip(1 - torch.exp(-(force_magnitude - FT_tresh)), 0, 1) * gripper_activation
                 # but we need an open hand to increase this likelihood
                 # so we generate a negative gradient
@@ -381,6 +385,7 @@ class KinematicJointConnection(ActiveInterconnection):
                                             torch.cos(elevation)], dim=0)
             translation = orientation_vector * state
             predicted_point = initial_point + translation
+            # print(f"KJC Predicted drawer position: {predicted_point}, actual drawer position: {position_drawer}")
             return predicted_point - position_drawer
 
         return connection_func
