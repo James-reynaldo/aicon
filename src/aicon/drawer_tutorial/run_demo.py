@@ -131,13 +131,16 @@ def main(device, env, rec_save_path=None):
         run_component_sequence(components, torch.tensor(curr_t))
         curr_commanded_vel = gripper_velo.quantities["action_velo_ee"]
         curr_commanded_gripper = gripper_component.quantities["gripper_activation"]
-        action = np.concatenate(
+        commanded_action = np.concatenate(
             [curr_commanded_vel.cpu().numpy(), np.zeros(3), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
         )
 
-        # action, grasp = input2action(
-        #     device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
-        # )
+        if curr_t < 1.5:
+            action, _ = input2action(
+                device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
+            )
+        else:
+            action = commanded_action
 
         obs, rew, done, info = env.step(action)
 
@@ -186,7 +189,7 @@ def main(device, env, rec_save_path=None):
                     vl = vis_like.cpu().numpy()
                 except Exception:
                     vl = vis_like
-                # print(f"Visibility likelihood at t={curr_t:.3f}: {vl}")
+                print(f"Visibility likelihood at t={curr_t:.3f}: {vl}")
 
         grasp_comp = components.get("GraspLikelihoodEstimator")
         if grasp_comp is not None:

@@ -776,7 +776,7 @@ class KinematicJointEstimator(EstimationComponent):
                  axis_azimuth_process_noise: float = 0.001,
                  axis_elevation_process_noise: float = 0.001,
                  joint_process_noise: float = 0.2,
-                 anchor_process_noise: float = 1e-6,
+                 anchor_process_noise: float = 1e-3,
                  grasp_threshold: float = 0.5,
                  grasp_floor: float = 0.000000000001,
                  covariance_alpha: float = 1.0):
@@ -889,14 +889,14 @@ class KinematicJointEstimator(EstimationComponent):
                                             shift_diagonal_matrix * Q_diag * dt)
             # azi, ele, and state are highly influenced when grasped, initial point else
             R_additive = R_additive_grasped * likelihood_grasped + R_additive_ungrasped * unlikelihood_grasped
-            mu_new, Sigma_new = update_shifting_ekf(c_func, mu_new, Sigma_new, position_drawer, uncertainty_drawer, R_additive, shift_diagonal_matrix, outlier_rejection_treshold = 1.0)
-            # if self.covariance_alpha < 1.0:
-            #     Sigma_blockdiag = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
-            #                                   torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
-            #     Sigma_new = (1 - self.covariance_alpha) * Sigma_new + self.covariance_alpha * Sigma_blockdiag
+            # outlier_rejection_treshold = 1.0 if likelihood_grasped_drawer >= 0.1 else None
+            # if outlier_rejection_treshold is None:
+            #     print("[kinematic_joint] low grasp likelihood; disabling outlier rejection for anchor update")
+            outlier_rejection_treshold = 4.0
+            mu_new, Sigma_new = update_shifting_ekf(c_func, mu_new, Sigma_new, position_drawer, uncertainty_drawer, R_additive, shift_diagonal_matrix, outlier_rejection_treshold= outlier_rejection_treshold)
             Sigma_new = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
                                           torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
-            print(f"[kinematic_joint] mu_new: {mu_new}")
+            print(f"[kinematic_joint] mu_new: {mu_new}, Sigma_new: {Sigma_new.diag()} uncertainty drawer: {torch.diag(uncertainty_drawer)}")
             return (mu_new, Sigma_new), (mu_new, Sigma_new)
 
         return f_func, ["kinematic_joint", "uncertainty_joint"], ["kinematic_joint", "uncertainty_joint"]
