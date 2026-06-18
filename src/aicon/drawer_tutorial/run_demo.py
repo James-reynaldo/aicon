@@ -5,8 +5,8 @@ import lovely_tensors as lt
 import numpy as np
 import robosuite as suite
 import torch
-from robosuite.devices import Keyboard, SpaceMouse
-from robosuite.utils.input_utils import input2action
+# from robosuite.devices import Keyboard, SpaceMouse
+# from robosuite.utils.input_utils import input2action
 from robosuite.utils.transform_utils import quat2mat
 from robosuite.wrappers import VisualizationWrapper
 
@@ -18,7 +18,7 @@ from aicon.middleware.python_sequential import build_components, run_component_s
 
 
 def setup_env(device_type, initial_qpos=None):
-    device = Keyboard(pos_sensitivity=1, rot_sensitivity=1)
+    # device = Keyboard(pos_sensitivity=1, rot_sensitivity=1)
     # Create our custom environment
     env = DrawerOpenEnv(
         robots="Panda",
@@ -35,14 +35,15 @@ def setup_env(device_type, initial_qpos=None):
 
     env = VisualizationWrapper(env)
     env.reset()
-    device.start_control()
-    return env, device
+    # device.start_control()
+    return env
+    # return env, device
 
 
-def main(device, env, rec_save_path=None):
+def main(env, rec_save_path=None):
     env.reset()
     robot = env.robots[0]
-    device.start_control()
+    # device.start_control()
 
     # Print debug information about the drawer
     env.env.print_debug_info()
@@ -135,12 +136,15 @@ def main(device, env, rec_save_path=None):
             [curr_commanded_vel.cpu().numpy(), np.zeros(3), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
         )
 
-        if curr_t < 1.5:
-            action, _ = input2action(
-                device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
-            )
-        else:
-            action = commanded_action
+        # if curr_t < 1.5:
+        #     action, _ = input2action(
+        #         device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
+        #     )
+        # else:
+        #     action = commanded_action
+
+        action = commanded_action
+        
 
         obs, rew, done, info = env.step(action)
 
@@ -218,8 +222,8 @@ def run_demo():
     # initial_panda_qpos = None
 
     # Pass the initial pose to the setup function
-    env, device = setup_env("keyboard", initial_qpos=initial_panda_qpos)
-    main(device, env)
+    env = setup_env("keyboard", initial_qpos=initial_panda_qpos)
+    main(env)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ including end-effector pose, drawer position, distances, grasp states, and joint
 from typing import Union, Callable, Dict, Iterable
 
 import torch
+import math
 from loguru import logger
 
 from aicon.base_classes.components import EstimationComponent
@@ -107,117 +108,6 @@ class EEPoseEstimator(EstimationComponent):
         self.quantities["uncertainty_ee"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_uncertainty_scale
         return True
 
-
-# class DrawerPositionEstimator(EstimationComponent):
-#     """
-#     Estimator for the drawer position.
-#     This component estimates the 3D position of the drawer using visual measurements
-#     and grasp kinematics.
-#     """
-#     state_dim = 3
-
-#     def __init__(self, name: str, connections: Dict[str, ActiveInterconnection], goals: Union[None, Dict[str, Callable]] = None,
-#                  dtype: Union[torch.dtype, None] = None, device: Union[torch.device, None] = None,
-#                  mockbuild: bool = False, no_differentiation: bool = False,
-#                  prevent_loops_in_differentiation: bool = True,
-#                  max_length_differentiation_trace: Union[int, None] = None,
-#                  forward_noise_grasped_scale: float = 0.15,
-#                  forward_noise_base_scale: float = 0.005,
-#                  grasp_update_noise: float = 0.01,
-#                  direct_measure_noise: float = 0.01,
-#                  grasp_outlier_threshold: float = 0.05,
-#                  initial_uncertainty_scale: float = 0.001):
-#         self.forward_noise_grasped_scale = forward_noise_grasped_scale
-#         self.forward_noise_base_scale = forward_noise_base_scale
-#         self.grasp_update_noise = grasp_update_noise
-#         self.direct_measure_noise = direct_measure_noise
-#         self.grasp_outlier_threshold = grasp_outlier_threshold
-#         self.initial_uncertainty_scale = initial_uncertainty_scale
-#         super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
-#                          prevent_loops_in_differentiation, max_length_differentiation_trace)
-
-#     def initialize_quantities(self):
-#         """
-#         Initialize the quantities using visual measurements.
-        
-#         Returns:
-#             bool: True if initialization was successful, False otherwise
-#         """
-#         c_proprio = self.connections["DrawerDirectMeasurement"]
-#         with c_proprio.lock:
-#             if c_proprio.connected_quantities_initialized["drawer_pos_meas"]:
-#                 drawer_pose_measured_ee = c_proprio.connected_quantities["drawer_pos_meas"]
-#             else:
-#                 return False
-#         self.quantities["position_drawer"] = drawer_pose_measured_ee
-#         self.quantities["uncertainty_drawer"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_uncertainty_scale
-#         return True
-
-#     def define_estimation_function_f(self):
-#         """
-#         Define the estimation function for drawer position.
-        
-#         Returns:
-#             tuple: (f_func, input_names, output_names)
-#             f_func: Function that updates the position estimate
-#             input_names: Names of input quantities
-#             output_names: Names of output quantities
-#         """
-#         def forward_drawer(mu):
-#             """
-#             Forward model for drawer position.
-            
-#             Args:
-#                 mu: Current position estimate
-            
-#             Returns:
-#                 tensor: Predicted position
-#             """
-#             return mu  # Drawers do not naturally move by themselves
-
-#         c_grasped = self.connections["GraspedDrawerKinematics"].c_func
-#         c_direct_meas = self.connections["DrawerDirectMeasurement"].c_func
-
-#         def f_func(position_drawer, uncertainty_drawer, pose_ee, uncertainty_ee, drawer_pos_meas,
-#                likelihood_grasped_drawer, dt):
-#             """
-#             Update the drawer position estimate using EKF.
-            
-#             Args:
-#                 position_drawer: Current position estimate
-#                 uncertainty_drawer: Current uncertainty estimate
-#                 pose_ee: Current end-effector pose
-#                 uncertainty_ee: End-effector uncertainty
-#                 drawer_pos_meas: Measured drawer position
-#                 likelihood_grasped_drawer: Likelihood of drawer being grasped
-#                 dt: Time step
-            
-#             Returns:
-#                 tuple: Updated position and uncertainty estimates
-#             """
-#             forward_noise = likelihood_grasped_drawer * self.forward_noise_grasped_scale * dt + self.forward_noise_base_scale * dt
-#             mu_new, Sigma_new = predict_ekf(forward_drawer, position_drawer, uncertainty_drawer,
-#                                             torch.eye(3, dtype=self.dtype, device=self.device) * forward_noise)
-#             mu_new, Sigma_new = update_switching_ekf(c_grasped, mu_new, Sigma_new, pose_ee, uncertainty_ee,
-#                                                      torch.eye(3, 3, dtype=self.dtype, device=self.device) * self.grasp_update_noise,
-#                                                      likelihood_grasped_drawer, outlier_rejection_treshold=self.grasp_outlier_threshold,
-#                                                      prevent_uncertainty_state_grad=False)
-#             mu_new, Sigma_new = update_ekf(c_direct_meas, mu_new, Sigma_new, drawer_pos_meas, 
-#                                            torch.eye(3, 3, dtype=self.dtype, device=self.device) * self.direct_measure_noise, 
-#                                                      torch.eye(3, 3, dtype=self.dtype, device=self.device) * self.direct_measure_noise,
-#                                                      prevent_uncertainty_state_grad=False)
-#             return (mu_new, Sigma_new), (mu_new, Sigma_new)
-
-#         return f_func, ["position_drawer", "uncertainty_drawer"], ["position_drawer", "uncertainty_drawer"]
-
-#     def initial_definitions(self):
-#         """
-#         Initialize the quantities for drawer position estimation.
-#         """
-#         self.quantities["position_drawer"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
-#         self.quantities["uncertainty_drawer"] = torch.zeros(self.state_dim, self.state_dim, dtype=self.dtype,
-#                                                             device=self.device)
-
 class DrawerPositionEstimator(EstimationComponent):
     """
     Estimator for the drawer position.
@@ -232,9 +122,30 @@ class DrawerPositionEstimator(EstimationComponent):
                  prevent_loops_in_differentiation: bool = True,
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_depth : Union[float, None] = None,
-                 initial_uncertainty_scale : Union[float, None] = 100,
+                 depth_prior : float = 0.8,
+                 initial_uncertainty_scale : Union[float, None] = 200,
+                 initial_uncertainty_xy : float = 0.2,
+                 initial_uncertainty_depth : float = 1.0,
+                 initial_uncertainty_xy_none : float = 0.1,
+                 initial_uncertainty_depth_none : float = 0.3,
                  sample_init_mean : bool = False,
+                 sample_init_mean_likelihood_threshold : float = 0.6,
+                 sample_init_mean_distance_threshold : float = 0.25,
+                 sample_init_mean_uncertainty_multiplier : float = 2.0,
                  meas_noise_factor : float = 0.025,
+                 visual_likelihood_steepness : float = 5.0,
+                 R_add_scale : float = 5.0,
+                 measurement_nan_reject_scale : float = 0.01,
+                 forward_noise_grasped_coeff : float = 0.15,
+                 forward_noise_base : float = 0.005,
+                 grasped_update_R_scale : float = 0.03,
+                 grasped_outlier_rejection_threshold : float = 0.05,
+                 measurement_existence_threshold : float = 0.5,
+                 grasped_uncertainty_threshold : float = 0.1,
+                 missed_measurement_uncertainty_coeff : float = 0.1,
+                 absent_measurement_uncertainty_coeff : float = 0.1,
+                 hand_change_recovery_time : float = 0.5,
+                 tf_lookup_timeout : float = 5.0,
                  initial_drawer_pos : Union[None, Iterable] = None):
         """
         Initialize the drawer position estimator.
@@ -249,17 +160,63 @@ class DrawerPositionEstimator(EstimationComponent):
             no_differentiation: Whether to disable differentiation
             prevent_loops_in_differentiation: Whether to prevent loops in differentiation
             max_length_differentiation_trace: Maximum length of differentiation trace
-            initial_depth: Initial depth estimate
+            initial_depth: Initial depth estimate override
+            depth_prior: Default depth prior when relative depth is unknown
             initial_uncertainty_scale: Scale factor for initial uncertainty
-            sample_init_mean: Whether to sample initial mean
+            initial_uncertainty_xy: Initial x/y uncertainty when scaled
+            initial_uncertainty_depth: Initial depth uncertainty when scaled
+            initial_uncertainty_xy_none: Initial x/y uncertainty when no uncertainty scale is provided
+            initial_uncertainty_depth_none: Initial depth uncertainty when no uncertainty scale is provided
+            sample_init_mean: Whether to sample the initial mean from the prior
+            sample_init_mean_likelihood_threshold: Minimum likelihood required for sample init mean
+            sample_init_mean_distance_threshold: Minimum depth required for sample init mean
+            sample_init_mean_uncertainty_multiplier: Multiplier for uncertainty after sample init mean
             meas_noise_factor: Factor for measurement noise
-            initial_drawer_pos: Initial drawer position
+            visual_likelihood_steepness: Steepness used for the visibility likelihood
+            R_add_scale: Scale for additional measurement covariance
+            measurement_nan_reject_scale: Scale factor applied when measurements are NaN
+            forward_noise_grasped_coeff: Grasp-dependent forward process noise coefficient
+            forward_noise_base: Base forward process noise coefficient
+            grasped_update_R_scale: Noise scale for grasped-kinematics update
+            grasped_outlier_rejection_threshold: Outlier rejection threshold for grasped update
+            measurement_existence_threshold: Threshold for treating a visual measurement as existent
+            grasped_uncertainty_threshold: Maximum grasp likelihood considered for measurement uncertainty increases
+            missed_measurement_uncertainty_coeff: Uncertainty growth coefficient when a likely measurement is missed
+            absent_measurement_uncertainty_coeff: Uncertainty growth coefficient when a measurement is absent
+            hand_change_recovery_time: Time threshold used for hand-change uncertainty logic
+            tf_lookup_timeout: Timeout for TF frame lookup
+            initial_drawer_pos: Initial drawer position override
         """
+        #Initialization parameters
         self.initial_depth = initial_depth
+        self.depth_prior = depth_prior
         self.initial_uncertainty_scale = initial_uncertainty_scale
+        self.initial_uncertainty_xy = initial_uncertainty_xy
+        self.initial_uncertainty_depth = initial_uncertainty_depth
+        self.initial_uncertainty_xy_none = initial_uncertainty_xy_none
+        self.initial_uncertainty_depth_none = initial_uncertainty_depth_none
         self.sample_init_mean = sample_init_mean
-        self.meas_noise_factor = meas_noise_factor
+        self.sample_init_mean_likelihood_threshold = sample_init_mean_likelihood_threshold
+        self.sample_init_mean_distance_threshold = sample_init_mean_distance_threshold
+        self.sample_init_mean_uncertainty_multiplier = sample_init_mean_uncertainty_multiplier
         self.initial_drawer_pos = initial_drawer_pos
+        # Edge case handling parameters
+        self.measurement_nan_reject_scale = measurement_nan_reject_scale
+        self.tf_lookup_timeout = tf_lookup_timeout
+        self.hand_change_recovery_time = hand_change_recovery_time
+        # EKF parameters
+        self.R_add_scale = R_add_scale
+        self.meas_noise_factor = meas_noise_factor
+        self.visual_likelihood_steepness = visual_likelihood_steepness       
+        self.forward_noise_grasped_coeff = forward_noise_grasped_coeff
+        self.forward_noise_base = forward_noise_base
+        self.grasped_update_R_scale = grasped_update_R_scale
+        self.grasped_outlier_rejection_threshold = grasped_outlier_rejection_threshold
+        self.measurement_existence_threshold = measurement_existence_threshold
+        self.grasped_uncertainty_threshold = grasped_uncertainty_threshold
+        self.missed_measurement_uncertainty_coeff = missed_measurement_uncertainty_coeff
+        self.absent_measurement_uncertainty_coeff = absent_measurement_uncertainty_coeff
+        
         super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
                          prevent_loops_in_differentiation, max_length_differentiation_trace)
 
@@ -294,23 +251,23 @@ class DrawerPositionEstimator(EstimationComponent):
             if torch.all(torch.isnan(relative_position)):
                 return False
             if self.initial_depth is None:
-                relative_position[2] = 0.8  # prior for where it should be
+                relative_position[2] = self.depth_prior  # prior for where it should be
             else:
                 relative_position[2] = self.initial_depth
             initial_mu = torch.einsum("ij,j->i", H, torch.concat(
                 [relative_position, torch.ones(1, dtype=self.dtype, device=self.device)]))[:3]
         if self.initial_uncertainty_scale is None:
-            Sigma = torch.eye(3, dtype=self.dtype, device=self.device) * 0.1
-            Sigma[2, 2] = 0.3 #1.2
+            Sigma = torch.eye(3, dtype=self.dtype, device=self.device) * self.initial_uncertainty_xy_none
+            Sigma[2, 2] = self.initial_uncertainty_depth_none
             initial_Sigma = torch.einsum("ij,jk,kl->il", H[:3, :3], Sigma, torch.transpose(H[:3, :3], dim0=0, dim1=1))
         else:
-            Sigma = torch.eye(3, dtype=self.dtype, device=self.device) * 0.2
-            Sigma[2, 2] = 1.0 #1.2
+            Sigma = torch.eye(3, dtype=self.dtype, device=self.device) * self.initial_uncertainty_xy
+            Sigma[2, 2] = self.initial_uncertainty_depth
             initial_Sigma = torch.einsum("ij,jk,kl->il", H[:3, :3], Sigma * self.initial_uncertainty_scale, torch.transpose(H[:3, :3], dim0=0, dim1=1))
         if self.sample_init_mean:
             likelihood = 0.0
             dist = 0.0
-            while likelihood < 0.6 or dist < 0.25:
+            while likelihood < self.sample_init_mean_likelihood_threshold or dist < self.sample_init_mean_distance_threshold:
                 sampled_mu = torch.distributions.multivariate_normal.MultivariateNormal(initial_mu, initial_Sigma).sample()
                 relative_pos = torch.einsum("ki,ij,j->k",
                                             homogeneous_transform_inverse(H_ee_to_cam),
@@ -320,7 +277,7 @@ class DrawerPositionEstimator(EstimationComponent):
                 likelihood = likelihood_func_visible(pose_ee, sampled_mu, H_ee_to_cam)
                 dist = relative_pos[2]
             initial_mu = sampled_mu
-            initial_Sigma = initial_Sigma * 2.0
+            initial_Sigma = initial_Sigma * self.sample_init_mean_uncertainty_multiplier
         # Override with hard-coded initial drawer position (requested)
         # initial_mu = torch.tensor([-0.01042636, 0.13032206, 1.00388733], dtype=self.dtype, device=self.device)
         # initial_Sigma = torch.eye(3, dtype=self.dtype, device=self.device) * 0.05
@@ -381,10 +338,10 @@ class DrawerPositionEstimator(EstimationComponent):
                 tuple: Updated uncertainty and position estimates
             """
             # compute uncertainty contributors
-            additive_noise_visibility = (1.0 - likelihood_func_visible(pose_ee, mu, H_ee_to_cam, steepness=5.0))
+            additive_noise_visibility = (1.0 - likelihood_func_visible(pose_ee, mu, H_ee_to_cam, steepness=self.visual_likelihood_steepness))
             additive_noise_distance = (1.0 - likelihood_dist_func(pose_ee, mu, H_ee_to_cam))
-            R_add = 5 * (torch.eye(3, dtype=dtype, device=device) * additive_noise_visibility +
-                         torch.eye(3, dtype=dtype, device=device) * additive_noise_distance)
+            R_add = self.R_add_scale * (torch.eye(3, dtype=dtype, device=device) * additive_noise_visibility +
+                                        torch.eye(3, dtype=dtype, device=device) * additive_noise_distance)
             R_meas = torch.eye(3, dtype=dtype, device=device) * self.meas_noise_factor
             likelihood_existent_measurement = likelihood_visible_drawer * (1.0 - likelihood_grasped_drawer.detach()) # Probability that usable visual meas exists
 
@@ -400,7 +357,7 @@ class DrawerPositionEstimator(EstimationComponent):
                                                                    uncertainty_ee,
                                                                    mock_relative_position_in_CF_drawer,
                                                                    R_meas,
-                                                                   R_add * 0.01,
+                                                                   R_add * self.measurement_nan_reject_scale,
                                                                    likelihood_existent_measurement,
                                                                    outlier_rejection_treshold=0.0)
             else:
@@ -416,13 +373,13 @@ class DrawerPositionEstimator(EstimationComponent):
             # increase uncertainty if we received a good measurement when we should not have or vice versa
             measurement_not_integrated = torch.equal(mu, mu_new)
             # print(f"[uncertainty-debug] measurement_integrated={not measurement_not_integrated}, Sigma_trace_before={torch.trace(Sigma).item()}, Sigma_trace_after={torch.trace(Sigma_new).item()}")
-            if measurement_not_integrated and likelihood_existent_measurement > 0.5:
+            if measurement_not_integrated and likelihood_existent_measurement > self.measurement_existence_threshold:
                 # visual measurements while grasped can be deceiving due to the hand being similarly blue
-                if likelihood_grasped_drawer < 0.1:
-                    Sigma_new = Sigma + torch.eye(3, dtype=dtype, device=device) * 0.1 * dt * likelihood_existent_measurement
-            elif (measurement_not_integrated) and (likelihood_existent_measurement < 0.5) and (not torch.all(torch.isnan(relative_position_in_CF_drawer))):
-                if likelihood_grasped_drawer < 0.1 and not likelihood_existent_measurement == 0.0:  # exactly zero means probbaly not fully initialized
-                    Sigma_new = Sigma + torch.eye(3, dtype=dtype, device=device) * 0.1 * dt * (1.0 - likelihood_existent_measurement)
+                if likelihood_grasped_drawer < self.grasped_uncertainty_threshold:
+                    Sigma_new = Sigma + torch.eye(3, dtype=dtype, device=device) * self.missed_measurement_uncertainty_coeff * dt * likelihood_existent_measurement
+            elif (measurement_not_integrated) and (likelihood_existent_measurement < self.measurement_existence_threshold) and (not torch.all(torch.isnan(relative_position_in_CF_drawer))):
+                if likelihood_grasped_drawer < self.grasped_uncertainty_threshold and not likelihood_existent_measurement == 0.0:  # exactly zero means probbaly not fully initialized
+                    Sigma_new = Sigma + torch.eye(3, dtype=dtype, device=device) * self.absent_measurement_uncertainty_coeff * dt * (1.0 - likelihood_existent_measurement)
             return Sigma_new, mu_new
 
         def f_func(position_drawer, uncertainty_drawer, pose_ee, uncertainty_ee, relative_position_in_CF_drawer,
@@ -444,7 +401,7 @@ class DrawerPositionEstimator(EstimationComponent):
             Returns:
                 tuple: Updated position and uncertainty estimates
             """
-            forward_noise = likelihood_grasped_drawer * 0.15 * dt + 0.005 * dt
+            forward_noise = likelihood_grasped_drawer * self.forward_noise_grasped_coeff * dt + self.forward_noise_base * dt
             # Disable forward noise for test
             # forward_noise = 0.0
             mu_new, Sigma_new = predict_ekf(forward_drawer, position_drawer, uncertainty_drawer,
@@ -455,10 +412,10 @@ class DrawerPositionEstimator(EstimationComponent):
                                                                            uncertainty_ee, dt, self.dtype, self.device)
                 # 0.584 = more than 10 % chance of an outlier
             mu_new, Sigma_new = update_switching_ekf(c_grasped, mu_new, Sigma_new, pose_ee, uncertainty_ee,
-                                                     torch.eye(3, 3, dtype=self.dtype, device=self.device) * 0.03,
-                                                     likelihood_grasped_drawer, outlier_rejection_treshold=0.05,
+                                                     torch.eye(3, 3, dtype=self.dtype, device=self.device) * self.grasped_update_R_scale,
+                                                     likelihood_grasped_drawer, outlier_rejection_treshold=self.grasped_outlier_rejection_threshold,
                                                      prevent_uncertainty_state_grad=False)
-            if time_since_hand_change[0] < 0.5 and time_since_hand_change[1] == 0 and likelihood_grasped_drawer != 0.0:
+            if time_since_hand_change[0] < self.hand_change_recovery_time and time_since_hand_change[1] == 0 and likelihood_grasped_drawer != 0.0:
                 # possibly in the process of loosing grasp
                 Sigma_new = Sigma_new + torch.eye(3, dtype=self.dtype, device=self.device) * dt
             return (mu_new, Sigma_new), (mu_new, Sigma_new)
@@ -559,12 +516,42 @@ class GraspedEstimator(EstimationComponent):
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_likelihood: float = 0.01,
                  initially_grasped: bool = False,
+                 initially_grasped_likelihood: float = 0.99,
                  clip_min: float = 1e-10,
-                 clip_max: float = 0.9999999):
-        # self.initial_likelihood = initial_likelihood
+                 clip_max: float = 0.9999999,
+                 baseline_measurement_likelihood: float = 0.05,
+                 initial_clip_min: float = 0.02,
+                 initial_clip_max: float = 0.98,
+                 initial_time_since_hand_change: float = 2.0,
+                 gripper_activation_threshold: float = 0.5,
+                 close_distance_threshold: float = 0.03,
+                 uncertainty_dist_threshold: float = 0.25,
+                 hand_change_time_threshold: float = 1.0,
+                 force_time_scale: float = 0.75,
+                 force_time_max: float = 2.25,
+                 low_likelihood_threshold: float = 0.1,
+                 negative_innovation_threshold: float = -0.05,
+                 negative_innovation_scale: float = 0.1):
+        # Initialization parameters
+        self.initial_likelihood = initial_likelihood
         self.initially_grasped = initially_grasped
+        self.initially_grasped_likelihood = initially_grasped_likelihood
         self.clip_min = clip_min
         self.clip_max = clip_max
+        self.baseline_measurement_likelihood = baseline_measurement_likelihood
+        self.initial_clip_min = initial_clip_min
+        self.initial_clip_max = initial_clip_max
+        self.initial_time_since_hand_change = initial_time_since_hand_change
+        # Estimation function parameters
+        self.gripper_activation_threshold = gripper_activation_threshold
+        self.close_distance_threshold = close_distance_threshold
+        self.uncertainty_dist_threshold = uncertainty_dist_threshold
+        self.hand_change_time_threshold = hand_change_time_threshold
+        self.force_time_scale = force_time_scale
+        self.force_time_max = force_time_max
+        self.low_likelihood_threshold = low_likelihood_threshold
+        self.negative_innovation_threshold = negative_innovation_threshold
+        self.negative_innovation_scale = negative_innovation_scale
         super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
                          prevent_loops_in_differentiation, max_length_differentiation_trace)
 
@@ -593,15 +580,15 @@ class GraspedEstimator(EstimationComponent):
             else:
                 return False
         if self.initially_grasped:
-            self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * 0.99
+            self.quantities["likelihood_grasped_drawer"] = torch.ones(self.state_dim, dtype=self.dtype, device=self.device) * self.initially_grasped_likelihood
             self.quantities["time_since_hand_change"] = torch.zeros(2, dtype=self.dtype, device=self.device)
         else:
             self.quantities["likelihood_grasped_drawer"] = torch.clip(
-                c_func(torch.tensor([0.05], dtype=self.dtype, device=self.device), distance_ee_drawer, uncertainty_dist,
+                c_func(torch.tensor([self.baseline_measurement_likelihood], dtype=self.dtype, device=self.device), distance_ee_drawer, uncertainty_dist,
                        gripper_activation, torch.zeros(3, dtype=self.dtype, device=self.device),
-                       torch.zeros(2, dtype=self.dtype, device=self.device)), 0.02, 0.98)
+                       torch.zeros(2, dtype=self.dtype, device=self.device)), self.initial_clip_min, self.initial_clip_max)
             self.quantities["time_since_hand_change"] = torch.zeros(2, dtype=self.dtype, device=self.device)
-            self.quantities["time_since_hand_change"][0] = 2.0
+            self.quantities["time_since_hand_change"][0] = self.initial_time_since_hand_change
         return True
     def define_estimation_function_f(self):
         """
@@ -614,27 +601,6 @@ class GraspedEstimator(EstimationComponent):
             output_names: Names of output quantities
         """
         c_func = self.connections["GraspedLikelihood"].c_func
-
-        # def f_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, ee_force_mag_meas, gripper_activation):
-        #     """
-        #     Update the grasp likelihood estimate.
-            
-        #     Args:
-        #         likelihood_grasped_drawer: Current grasp likelihood
-        #         distance_ee_drawer: Current estimated distance and orientation between EE and drawer
-        #         uncertainty_dist: Current uncertainty in the distance estimate
-        #         gripper_activation: Current gripper activation
-        #         ee_force_mag_meas: Current end-effector force magnitude
-            
-        #     Returns:
-        #         tuple: Updated grasp likelihood
-        #     """
-        #     innovation = c_func(distance_ee_drawer, uncertainty_dist, likelihood_grasped_drawer, gripper_activation, ee_force_mag_meas)
-        #     new_likelihood = likelihood_grasped_drawer + innovation
-        #     new_likelihood = gradient_preserving_clipping(new_likelihood, self.clip_min, self.clip_max)
-        #     return (new_likelihood), (new_likelihood)
-            
-        # return f_func, ["likelihood_grasped_drawer"], ["likelihood_grasped_drawer"]
 
         def f_func(likelihood_grasped_drawer, distance_ee_drawer, gripper_activation, ee_force_mag_meas, uncertainty_dist, time_since_hand_change, dt):
             """
@@ -653,22 +619,22 @@ class GraspedEstimator(EstimationComponent):
                 tuple: Updated grasp likelihood
             """
             time_since_hand_change_new = torch.clone(time_since_hand_change).detach()
-            if gripper_activation > 0.5:
+            if gripper_activation > self.gripper_activation_threshold:
                 time_since_hand_change_new[0] = 0.0
                 time_since_hand_change_new[1] = dt + time_since_hand_change[1]
             else:
                 time_since_hand_change_new[0] = time_since_hand_change[0] + dt
                 time_since_hand_change_new[1] = 0.0
             force_magnitude = torch.norm(ee_force_mag_meas)
-            if (distance_ee_drawer[0] < 0.03 and uncertainty_dist < 0.25 and time_since_hand_change[0] > 1.0) or (gripper_activation > 0.5):
-                FT_tresh = torch.minimum(time_since_hand_change[1] * 0.75, torch.ones_like(time_since_hand_change[1]) * 2.25)
+            if (distance_ee_drawer[0] < self.close_distance_threshold and uncertainty_dist < self.uncertainty_dist_threshold and time_since_hand_change[0] > self.hand_change_time_threshold) or (gripper_activation > self.gripper_activation_threshold):
+                FT_tresh = torch.minimum(time_since_hand_change[1] * self.force_time_scale, torch.ones_like(time_since_hand_change[1]) * self.force_time_max)
                 likelihood_from_hand_and_force = torch.clip(1 - torch.exp(-(force_magnitude - FT_tresh)), 0, 1) * gripper_activation
-                if (likelihood_grasped_drawer < 0.1) and (likelihood_from_hand_and_force < 0.1) and (gripper_activation > 0.5):
+                if (likelihood_grasped_drawer < self.low_likelihood_threshold) and (likelihood_from_hand_and_force < self.low_likelihood_threshold) and (gripper_activation > self.gripper_activation_threshold):
                     likelihood_from_hand_and_force = (likelihood_from_hand_and_force.detach() -
                                                    gripper_activation + gripper_activation.detach())
             innovation = c_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, gripper_activation, ee_force_mag_meas, time_since_hand_change_new)
-            if innovation < - 0.05:
-                new_likelihood = likelihood_grasped_drawer + 0.1 * innovation   # slowly decide that it isnt grasped anymore
+            if innovation < self.negative_innovation_threshold:
+                new_likelihood = likelihood_grasped_drawer + self.negative_innovation_scale * innovation   # slowly decide that it isnt grasped anymore
             else:
                 new_likelihood = likelihood_grasped_drawer + innovation
             new_likelihood = gradient_preserving_clipping(new_likelihood, self.clip_min, self.clip_max)
@@ -692,6 +658,48 @@ class VisibleEstimator(EstimationComponent):
     """
     state_dim = 1
 
+    def __init__(self, name: str, connections: Dict[str, ActiveInterconnection], goals: Union[None, Dict[str, Callable]] = None,
+                 dtype: Union[torch.dtype, None] = None, device: Union[torch.device, None] = None,
+                 mockbuild: bool = False, no_differentiation: bool = False,
+                 prevent_loops_in_differentiation: bool = True,
+                 max_length_differentiation_trace: Union[int, None] = None,
+                 initial_likelihood_prior: float = 0.95,
+                 initial_clip_min: float = 0.02,
+                 initial_clip_max: float = 0.98,
+                 update_gain: float = 0.5,
+                 clip_min: float = 1e-9,
+                 clip_max: float = 0.9999999):
+        """
+        Initialize the visibility estimator.
+
+        Args:
+            name: Name of the estimator
+            connections: Dictionary of connections
+            goals: Dictionary of goal functions
+            dtype: Data type for computations
+            device: Device for computations
+            mockbuild: Whether to run in mock build mode
+            no_differentiation: Whether to disable differentiation
+            prevent_loops_in_differentiation: Whether to prevent loops in differentiation
+            max_length_differentiation_trace: Maximum length of differentiation trace
+            initial_likelihood_prior: Initial visibility likelihood prior
+            initial_clip_min: Minimum visibility likelihood after initialization
+            initial_clip_max: Maximum visibility likelihood after initialization
+            update_gain: Gain used when updating the visibility likelihood
+            clip_min: Minimum visibility likelihood during updates
+            clip_max: Maximum visibility likelihood during updates
+        """
+        # Initialization parameters
+        self.initial_likelihood_prior = initial_likelihood_prior
+        self.initial_clip_min = initial_clip_min
+        self.initial_clip_max = initial_clip_max
+        # Estimation function parameters
+        self.update_gain = update_gain
+        self.clip_min = clip_min
+        self.clip_max = clip_max
+        super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
+                         prevent_loops_in_differentiation, max_length_differentiation_trace)
+
     def initialize_quantities(self):
         """
         Initialize the quantities for visibility estimation.
@@ -711,7 +719,8 @@ class VisibleEstimator(EstimationComponent):
             else:
                 return False
         self.quantities["likelihood_visible_drawer"] = torch.clip(
-            c_func(torch.tensor([0.95], dtype=self.dtype, device=self.device), pose_ee, position_drawer), 0.02, 0.98)
+            c_func(torch.tensor([self.initial_likelihood_prior], dtype=self.dtype, device=self.device), pose_ee, position_drawer),
+            self.initial_clip_min, self.initial_clip_max)
         return True
 
     def define_estimation_function_f(self):
@@ -741,8 +750,8 @@ class VisibleEstimator(EstimationComponent):
                     tuple: Updated visibility likelihood
             """
             innovation = c_func(likelihood_visible_drawer, pose_ee, position_drawer)
-            new_likelihood = likelihood_visible_drawer + 0.5 * innovation
-            new_likelihood = torch.clip(new_likelihood, 0.000000001, 0.9999999)
+            new_likelihood = likelihood_visible_drawer + self.update_gain * innovation
+            new_likelihood = torch.clip(new_likelihood, self.clip_min, self.clip_max)
             return (new_likelihood), (new_likelihood)
 
         return f_func, ["likelihood_visible_drawer"], ["likelihood_visible_drawer"]
@@ -779,7 +788,11 @@ class KinematicJointEstimator(EstimationComponent):
                  anchor_process_noise: float = 1e-3,
                  grasp_threshold: float = 0.5,
                  grasp_floor: float = 0.000000000001,
-                 covariance_alpha: float = 1.0):
+                 covariance_alpha: float = 1.0,
+                 initial_azimuth_default: float = -math.pi/4,
+                 initial_elevation_default: float = -math.pi/2,
+                 outlier_rejection_treshold: float = 4.0,
+                 shift_clip_min: float = 1e-10):
         """
         Initialize the kinematic joint estimator.
         
@@ -797,9 +810,13 @@ class KinematicJointEstimator(EstimationComponent):
             initial_uncertainty_scale: Scale factor for initial uncertainty
             sample_init_mean: Whether to sample initial mean
         """
+        # Initialization parameters
         self.initial_rotation_xy = initial_rotation_xy
         self.initial_uncertainty_scale = initial_uncertainty_scale
         self.sample_init_mean = sample_init_mean
+        self.initial_azimuth_default = initial_azimuth_default
+        self.initial_elevation_default = initial_elevation_default
+        # Estimation function parameters
         self.grasped_noise = grasped_noise
         self.ungrasped_noise = ungrasped_noise
         self.axis_azimuth_process_noise = axis_azimuth_process_noise
@@ -807,8 +824,9 @@ class KinematicJointEstimator(EstimationComponent):
         self.joint_process_noise = joint_process_noise
         self.anchor_process_noise = anchor_process_noise
         self.grasp_threshold = grasp_threshold
-        self.grasp_floor = grasp_floor
-        self.covariance_alpha = covariance_alpha
+        self.grasp_floor = grasp_floor        
+        self.outlier_rejection_treshold = outlier_rejection_treshold
+        self.shift_clip_min = shift_clip_min
         super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
                          prevent_loops_in_differentiation, max_length_differentiation_trace)
 
@@ -816,10 +834,11 @@ class KinematicJointEstimator(EstimationComponent):
         if not self.connections["DrawerKinematics"].connected_quantities_initialized["position_drawer"]:
             return False
         self.quantities["kinematic_joint"] = torch.zeros(self.state_dim, device=self.device, dtype=self.dtype)
-        self.quantities["kinematic_joint"][1] = - torch.pi / 2 # is always on the xy plane
+        # elevation default (index 1)
+        self.quantities["kinematic_joint"][1] = self.initial_elevation_default
         if self.initial_rotation_xy is None:
-            self.quantities["kinematic_joint"][0] = - torch.pi / 2 * 0.5
-            pass
+            # azimuth default (index 0)
+            self.quantities["kinematic_joint"][0] = self.initial_azimuth_default
         else:
             # depends on rotation of robot to drawer cabinet
             self.quantities["kinematic_joint"][0] = self.initial_rotation_xy
@@ -879,7 +898,7 @@ class KinematicJointEstimator(EstimationComponent):
             """
             # starting from 0.5 grasp likelihood we do not want to integrate any starting point info anymore
             # but instead only about the joint
-            unlikelihood_grasped = gradient_preserving_clipping((self.grasp_threshold - likelihood_grasped_drawer) / self.grasp_threshold, 0.0000000001, 1.0)
+            unlikelihood_grasped = gradient_preserving_clipping((self.grasp_threshold - likelihood_grasped_drawer) / self.grasp_threshold, self.shift_clip_min, 1.0)
             likelihood_grasped = gradient_preserving_clipping(likelihood_grasped_drawer, self.grasp_floor, 1.0) # important also
             shift_diagonal_matrix = torch.diag(torch.cat([likelihood_grasped, likelihood_grasped, likelihood_grasped,
                                                           unlikelihood_grasped, unlikelihood_grasped, unlikelihood_grasped]))
@@ -892,7 +911,7 @@ class KinematicJointEstimator(EstimationComponent):
             # outlier_rejection_treshold = 1.0 if likelihood_grasped_drawer >= 0.1 else None
             # if outlier_rejection_treshold is None:
             #     print("[kinematic_joint] low grasp likelihood; disabling outlier rejection for anchor update")
-            outlier_rejection_treshold = 4.0
+            outlier_rejection_treshold = self.outlier_rejection_treshold
             mu_new, Sigma_new = update_shifting_ekf(c_func, mu_new, Sigma_new, position_drawer, uncertainty_drawer, R_additive, shift_diagonal_matrix, outlier_rejection_treshold= outlier_rejection_treshold)
             Sigma_new = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
                                           torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)

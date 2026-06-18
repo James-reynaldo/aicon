@@ -150,7 +150,15 @@ def get_default_connection_params():
             "ft_noise_offset": 5.0,
             "low_likelihood_threshold": 0.1,
             "gripper_activation_threshold": 0.5,
-            "uncertainty_dist_threshold": 0.5,
+            "uncertainty_dist_threshold": 0.25,
+            "uncertainty_dist_offset": 0.2,
+            "uncertainty_dist_scale": 5.0,
+            "uncertainty_dist_relevance_scale": 20.0,
+            "angle_center": 0.5,
+            "angle_sigmoid_scale": 5.0,
+            "hand_change_time_threshold": 1.0,
+            "force_time_scale": 0.75,
+            "force_time_max": 2.25,
             "small_likelihood_value": 1e-8,
         }
     }
