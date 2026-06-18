@@ -138,13 +138,21 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
     """
     def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False,
             dist_decay: float = 4.0,
-            close_dist_threshold: float = 0.05,
+            close_dist_threshold: float = 0.03,
             force_threshold: float = 10.0,
             ft_noise_offset: float = 5.0,
             low_likelihood_threshold: float = 0.1,
             gripper_activation_threshold: float = 0.5,
             uncertainty_dist_threshold: float = 0.25,
-            small_likelihood_value: float = 1e-8):
+            small_likelihood_value: float = 1e-8,
+            # additional tunable constants that were previously hard-coded
+            uncertainty_bias: float = 0.2,
+            uncertainty_scale_uncertainty: float = 5.0,
+            uncertainty_scale_relevance: float = 20.0,
+            dist_sigmoid_scale: float = 5.0,
+            time_since_hand_change_threshold: float = 1.0,
+            ft_tresh_multiplier: float = 0.75,
+            ft_tresh_cap: float = 2.25):
         super().__init__(name, {"distance_ee_drawer": (2,), "uncertainty_dist": (1,),
                     "likelihood_grasped_drawer": (1,), "gripper_activation": (1,), "ee_force_mag_meas": (1,),
                     "time_since_hand_change": (2,),}, dtype=dtype,
@@ -158,34 +166,66 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
         self.gripper_activation_threshold = gripper_activation_threshold
         self.uncertainty_dist_threshold = uncertainty_dist_threshold
         self.small_likelihood_value = small_likelihood_value
+        # previously hard-coded constants
+        self.uncertainty_bias = uncertainty_bias
+        self.uncertainty_scale_uncertainty = uncertainty_scale_uncertainty
+        self.uncertainty_scale_relevance = uncertainty_scale_relevance
+        self.dist_sigmoid_scale = dist_sigmoid_scale
+        self.time_since_hand_change_threshold = time_since_hand_change_threshold
+        self.ft_tresh_multiplier = ft_tresh_multiplier
+        self.ft_tresh_cap = ft_tresh_cap
 
     def define_implicit_connection_function(self):
         def connection_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, gripper_activation, ee_force_mag_meas, time_since_hand_change):
-            likelihood_given_uncertainty = torch.clip(torch.exp(-(uncertainty_dist - 0.2) * 5), max=1.0)
+            likelihood_given_uncertainty = torch.clip(
+                torch.exp(-(uncertainty_dist - self.uncertainty_bias) * self.uncertainty_scale_uncertainty),
+                max=1.0,
+            )
             innovation_from_uncertainty = likelihood_given_uncertainty - likelihood_grasped_drawer
 
-            dist_relevance = (1 - torch.sigmoid((distance_ee_drawer[1]-0.5) * 5)) * torch.clip(torch.exp(-(uncertainty_dist - 0.2) * 20), max=1.0)
+            dist_relevance = (
+                1 - torch.sigmoid((distance_ee_drawer[1] - 0.5) * self.dist_sigmoid_scale)
+            ) * torch.clip(
+                torch.exp(-(uncertainty_dist - self.uncertainty_bias) * self.uncertainty_scale_relevance),
+                max=1.0,
+            )
             expected_dist = torch.sum(distance_ee_drawer) + uncertainty_dist
-            likelihood_given_dist = torch.exp(-expected_dist * 4) * dist_relevance
+            likelihood_given_dist = torch.exp(-expected_dist * self.dist_decay) * dist_relevance
             innovation_from_dist = likelihood_given_dist - likelihood_given_uncertainty.detach()
 
             force_magnitude = torch.norm(ee_force_mag_meas)
-            print(f"Distance EE-Drawer: {distance_ee_drawer[0].item()}, Uncertainty: {uncertainty_dist.item(),}, Force magnitude: {force_magnitude.item()}")
+            print(
+                f"Distance EE-Drawer: {distance_ee_drawer[0].item()}, Uncertainty: {uncertainty_dist.item(),}, Force magnitude: {force_magnitude.item()}"
+            )
             # hand and force measurements are only relevant if we are close (otherwise from other source...)
-            if (distance_ee_drawer[0] < 0.03 and uncertainty_dist < self.uncertainty_dist_threshold and time_since_hand_change[0] > 1.0) or (gripper_activation > 0.5):
-                # under 2N is just FT noise
-                FT_tresh = torch.minimum(time_since_hand_change[1] * 0.75, torch.ones_like(time_since_hand_change[1]) * 2.25)
-                # print(f"FT threshold: {FT_tresh.item()}")
-                likelihood_from_hand_and_force = torch.clip(1 - torch.exp(-(force_magnitude - FT_tresh)), 0, 1) * gripper_activation
-                # but we need an open hand to increase this likelihood
-                # so we generate a negative gradient
-                if (likelihood_grasped_drawer < 0.1) and (likelihood_from_hand_and_force < 0.1) and (gripper_activation > 0.5):
-                    # print("Should open")
-                    likelihood_from_hand_and_force = (likelihood_from_hand_and_force.detach() -
-                                                      gripper_activation + gripper_activation.detach())
+            if (
+                (distance_ee_drawer[0] < self.close_dist_threshold
+                 and uncertainty_dist < self.uncertainty_dist_threshold
+                 and time_since_hand_change[0] > self.time_since_hand_change_threshold)
+                or (gripper_activation > self.gripper_activation_threshold)
+            ):
+                # under small force is just FT noise
+                FT_tresh = torch.minimum(
+                    time_since_hand_change[1] * self.ft_tresh_multiplier,
+                    torch.ones_like(time_since_hand_change[1]) * self.ft_tresh_cap,
+                )
+                likelihood_from_hand_and_force = torch.clip(
+                    1 - torch.exp(-(force_magnitude - FT_tresh)), 0, 1
+                ) * gripper_activation
+                # need an open hand to increase this likelihood -> generate a negative gradient
+                if (
+                    (likelihood_grasped_drawer < self.low_likelihood_threshold)
+                    and (likelihood_from_hand_and_force < self.low_likelihood_threshold)
+                    and (gripper_activation > self.gripper_activation_threshold)
+                ):
+                    likelihood_from_hand_and_force = (
+                        likelihood_from_hand_and_force.detach()
+                        - gripper_activation
+                        + gripper_activation.detach()
+                    )
             else:
                 # essentially no likelihood
-                likelihood_from_hand_and_force = torch.ones_like(likelihood_given_uncertainty) * 0.00000001
+                likelihood_from_hand_and_force = torch.ones_like(likelihood_given_uncertainty) * self.small_likelihood_value
 
             innovation_from_hand_and_force = likelihood_from_hand_and_force - likelihood_given_dist.detach()
             return innovation_from_uncertainty + innovation_from_dist + innovation_from_hand_and_force
