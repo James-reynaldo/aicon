@@ -48,29 +48,6 @@ def build_connections(connection_params: dict = None):
 }
     return connections
 
-
-# class EEDrawerGraspedConnection(ActiveInterconnection):
-#     """
-#     Active Interconnection between the end-effector and the grasped drawer.
-#     The difference in position should be zero, because a grasped object moves together with the end-effector.
-#     """
-#     def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False):
-#         super().__init__(name, {"pose_ee": (6,), "uncertainty_ee": (6, 6), "position_drawer": (3,),
-#                                 "uncertainty_drawer": (3, 3), "likelihood_grasped_drawer": (1,)}, dtype=dtype,
-#                          device=device, mockbuild=mockbuild,
-#                          # for on/off switching connection we can require gradient signs
-#                          # if we want to move the position of the drawer more we want it to be grasped
-#                          # if we want to change ee more, we do not want it to be grasped
-#                          required_signs_dict={"position_drawer" : {"likelihood_grasped_drawer": 1},
-#                                               "uncertainty_drawer": {"likelihood_grasped_drawer": 1},
-#                                               "pose_ee" : {"likelihood_grasped_drawer": -1}})
-
-#     def define_implicit_connection_function(self):
-#         def connection_func(position_drawer, pose_ee):
-#             relative_vector = position_drawer - pose_ee[:3]
-#             return relative_vector
-
-#         return connection_func
 class EEDrawerGraspedConnection(ActiveInterconnection):
     """
     Active Interconnection between the end-effector and the grasped drawer.

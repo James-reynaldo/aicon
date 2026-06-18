@@ -12,6 +12,10 @@ from robosuite.wrappers import VisualizationWrapper
 
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
 
+# Disturbance configuration for periodic jerks
+DISTURBANCE_INTERVAL = 1.0
+DISTURBANCE_MAGNITUDE = 5
+
 # Import our custom environment
 from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
 from aicon.middleware.python_sequential import build_components, run_component_sequence
@@ -143,8 +147,15 @@ def main(env, rec_save_path=None):
         # else:
         #     action = commanded_action
 
-        action = commanded_action
-        
+        # add a random jerk disturbance every DISTURBANCE_INTERVAL seconds
+        if int(curr_t / DISTURBANCE_INTERVAL) != int((curr_t - env.control_timestep) / DISTURBANCE_INTERVAL):
+            jerk = np.random.uniform(-DISTURBANCE_MAGNITUDE, DISTURBANCE_MAGNITUDE, size=3)
+            disturbance = np.concatenate([jerk, np.zeros(4)])  # Apply jerk to the first 3 dimensions (velocity), not to the gripper activation
+            print(f"\n*** Applying disturbance at t={curr_t:.3f}: {disturbance} ***\n")
+        else:
+            disturbance = np.zeros(7)
+
+        action = commanded_action + disturbance
 
         obs, rew, done, info = env.step(action)
 

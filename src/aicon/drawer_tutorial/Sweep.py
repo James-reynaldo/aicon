@@ -29,7 +29,7 @@ DEFAULT_RENDER_SWEEP = True
 # Demo configuration: set mode to either "sweep" or "default_loop"
 # - "sweep": run the parameter sweep (existing behavior)
 # - "default_loop": run the environment repeatedly with default params
-DEMO_MODE = "default_loop"  # options: "sweep", "default_loop"
+DEMO_MODE = "sweep"  # options: "sweep", "default_loop"
 # Delay between default-loop trials (seconds)
 DEFAULT_LOOP_DELAY = 1.0
 # Set to an integer for reproducible runs, or None to disable explicit seeding.
@@ -37,7 +37,7 @@ DEMO_SEED = 123
 # If True, reseed before each trial so each trial starts from the same RNG state.
 RESEED_EACH_TRIAL = False
 # If True, only run the single parameter selected below.
-RUN_ONLY_SINGLE_PARAMETER = True
+RUN_ONLY_SINGLE_PARAMETER = False
 # Selected single-parameter sweep target.
 SINGLE_SWEEP_GROUP = "connection.DistGraspHandConnection"
 SINGLE_SWEEP_PARAM = "ft_noise_offset"
@@ -63,7 +63,7 @@ def setup_env(initial_qpos=None, render=False):
         render_camera="agentview",
         horizon=100,
         control_freq=30,
-        controller_configs=suite.load_controller_config(default_controller="OSC_POSITION"),
+        controller_configs=suite.load_controller_config(default_controller="OSC_POSE"),
         initial_qpos=initial_qpos,
     )
 
@@ -75,25 +75,75 @@ def setup_env(initial_qpos=None, render=False):
 def get_default_estimator_params():
     return {
         "ee_pose": {
+            "initial_uncertainty_scale": 0.001, # Seem to not matter at all
             "action_process_noise": 0.01, # Seem to not matter so much, just not negative (fail)
             "proprio_update_noise": 0.01, # Seem to not matter so much, just not negative (fail)
-            "initial_uncertainty_scale": 0.001, # Seem to not matter at all
         },
-        "visible_likelihood": {
-            "initial_likelihood": 0.01,
+        "visible": {
+            "initial_likelihood_prior": 0.01,
+            "initial_clip_min": 0.02,
+            "initial_clip_max": 0.98,
+
+            "update_gain": 0.5,
+            # "clip_min": 1e-9,
+            # "clip_max": 0.9999999,
         },
         "grasp_likelihood": {
             "initial_likelihood": 0.01, # Seem to not matter at all
+            # "initially_grasped": False,
+            "initially_grasped_likelihood": 0.99,
+            # "clip_min": 1e-10,
+            # "clip_max": 0.9999999,
+            "baseline_measurement_likelihood": 0.05,
+            "initial_clip_min": 0.02,
+            "initial_clip_max": 0.98,
+            "initial_time_since_hand_change": 2.0,
+
+            "gripper_activation_threshold": 0.5,
+            "close_distance_threshold": 0.03,
+            "uncertainty_dist_threshold": 0.25,
+            "hand_change_time_threshold": 1.0,
+            "force_time_scale": 0.75,
+            "force_time_max": 2.25,
+            "low_likelihood_threshold": 0.1,
+            "negative_innovation_threshold": -0.05,
+            "negative_innovation_scale": 0.1,
         },
         "drawer_position": {
-            "forward_noise_grasped_scale": 0.15, # When negative it will fail, else does not seem to matter much
-            "forward_noise_base_scale": 0.005, # Seem to not matter at all
-            "grasp_update_noise": 0.01, # When negative, timestep is longer but it will still often succeed; when positive it does not seem to matter much
-            "direct_measure_noise": 0.01, # When negative there is a chance to fail
-            "grasp_outlier_threshold": 0.05, # Seem to not matter at all
-            "initial_uncertainty_scale": 0.001, # When value too high, estimation error is big
+            # "initial_depth": None,
+            "depth_prior": 0.8,
+            "initial_uncertainty_scale": 200,
+            "initial_uncertainty_xy": 0.2,
+            "initial_uncertainty_depth": 1.0,
+            "initial_uncertainty_xy_none": 0.1,
+            "initial_uncertainty_depth_none": 0.3,
+            # "sample_init_mean": False,
+            "sample_init_mean_likelihood_threshold": 0.6,
+            "sample_init_mean_distance_threshold": 0.25,
+            "sample_init_mean_uncertainty_multiplier": 2.0,
+
+            "meas_noise_factor": 0.025,
+            "visual_likelihood_steepness": 5.0,
+            "R_add_scale": 5.0,
+            "measurement_nan_reject_scale": 0.01,
+            "forward_noise_grasped_coeff": 0.15, # When negative it will fail, else does not seem to matter much
+            "forward_noise_base": 0.005, # Seem to not matter at all
+            "grasped_update_R_scale": 0.03, # When negative, timestep is longer but it will still often succeed; when positive it does not seem to matter much
+            "grasped_outlier_rejection_threshold": 0.05, # Seem to not matter at all
+            "measurement_existence_threshold": 0.5,
+            "grasped_uncertainty_threshold": 0.1,
+            "missed_measurement_uncertainty_coeff": 0.1,
+            "absent_measurement_uncertainty_coeff": 0.1,
+            "hand_change_recovery_time": 0.5,
+            "tf_lookup_timeout": 5.0,
         },
         "kinematic_joint": {
+            # "initial_rotation_xy": None,
+            # "initial_uncertainty_scale": None,
+            # "sample_init_mean": False,
+            # "initial_azimuth_default": -0.7853981633974483,
+            # "initial_elevation_default": -1.5707963267948966,
+
             "grasped_noise": 0.002, # When value too high, estimation error quite big
             "ungrasped_noise": 0.001, # Seem to not matter at all
             "axis_azimuth_process_noise": 0.001, # Does not seem to matter
@@ -102,18 +152,41 @@ def get_default_estimator_params():
             "anchor_process_noise": 1e-6, # Does not seem to matter
             "grasp_threshold": 0.2, # Does not matter much, just not zero
             "grasp_floor": 0.2, # When value too high, estimation error quite big
-            "covariance_alpha": 1.0, # When negative, has tendency to fail
+            "outlier_rejection_treshold": 4.0,
+            "shift_clip_min": 1e-10,
         },
     }
 
+def get_default_connection_params():
+    # Defaults mirror the hard-coded values in DistGraspHandConnection
+    return {
+        "DistGraspHandConnection": {
+            "dist_decay": 4.0,
+            "close_dist_threshold": 0.03,
+            "force_threshold": 10.0,
+            "ft_noise_offset": 5.0,
+            "low_likelihood_threshold": 0.1,
+            "gripper_activation_threshold": 0.5,
+            "uncertainty_dist_threshold": 0.25,
+            "small_likelihood_value": 1e-8,
+
+            "uncertainty_bias": 0.2,
+            "uncertainty_scale_uncertainty": 5.0,
+            "uncertainty_scale_relevance": 20.0,
+            "dist_sigmoid_scale": 5.0,
+            "time_since_hand_change_threshold": 1.0,
+            "ft_tresh_multiplier": 0.75,
+            "ft_tresh_cap": 2.25,
+        }
+    }
 
 def get_sweep_values(standard_value):
     return [
-        ("standard", standard_value),
         ("negative", -standard_value),
         ("zero", 0.0),
         ("x0.001", 0.001 * standard_value),
         ("x0.5", 0.5 * standard_value),
+        ("standard", standard_value),
         ("x2", 2.0 * standard_value),
         ("x1000", 1000.0 * standard_value),
     ]
@@ -138,30 +211,6 @@ def generate_single_parameter_sweeps(base_params):
 
 def filter_single_parameter_sweeps(sweep_jobs, group_name, param_name):
     return [job for job in sweep_jobs if job["group_name"] == group_name and job["param_name"] == param_name]
-
-
-def get_default_connection_params():
-    # Defaults mirror the hard-coded values in DistGraspHandConnection
-    return {
-        "DistGraspHandConnection": {
-            "dist_decay": 4.0,
-            "close_dist_threshold": 0.05,
-            "force_threshold": 10.0,
-            "ft_noise_offset": 5.0,
-            "low_likelihood_threshold": 0.1,
-            "gripper_activation_threshold": 0.5,
-            "uncertainty_dist_threshold": 0.25,
-            "uncertainty_dist_offset": 0.2,
-            "uncertainty_dist_scale": 5.0,
-            "uncertainty_dist_relevance_scale": 20.0,
-            "angle_center": 0.5,
-            "angle_sigmoid_scale": 5.0,
-            "hand_change_time_threshold": 1.0,
-            "force_time_scale": 0.75,
-            "force_time_max": 2.25,
-            "small_likelihood_value": 1e-8,
-        }
-    }
 
 
 def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_label="", group_name="", param_name="", sweep_value=None, stop_on_done=True, reset_on_start=True):
@@ -192,7 +241,7 @@ def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_lab
         curr_commanded_gripper = gripper_component.quantities["gripper_activation"]
 
         action = np.concatenate(
-            [curr_commanded_vel.cpu().numpy(), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
+            [curr_commanded_vel.cpu().numpy(), np.zeros(3), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
         )
 
         _, rew, done, _ = env.step(action)
@@ -282,8 +331,7 @@ def main(env, max_timesteps_per_trial=500, render=False, rec_save_path=None):
         trial_est_params["connection_params"] = conn_trial
         job["trial_params"] = trial_est_params
 
-    # sweep_jobs = sweep_jobs_est + sweep_jobs_conn
-    sweep_jobs =  sweep_jobs_conn
+    sweep_jobs = sweep_jobs_est + sweep_jobs_conn
     if RUN_ONLY_SINGLE_PARAMETER:
         sweep_jobs = filter_single_parameter_sweeps(sweep_jobs, SINGLE_SWEEP_GROUP, SINGLE_SWEEP_PARAM)
         if not sweep_jobs:
@@ -359,7 +407,7 @@ def main(env, max_timesteps_per_trial=500, render=False, rec_save_path=None):
 def run_demo(render=DEFAULT_RENDER_SWEEP, max_timesteps_per_trial=500):
     set_global_seed(DEMO_SEED)
     # Define the desired initial joint positions for the Panda robot (7 joints)
-    initial_panda_qpos = np.array([-0.2, 0.2, 0.1, -2.0, 0.0, 1.5, 0.7])
+    initial_panda_qpos = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
     # initial_panda_qpos = None
 
     # Pass the initial pose to the setup function
@@ -402,7 +450,7 @@ def run_default_loop(env, base_params, max_timesteps_per_trial=500, render=False
 if __name__ == "__main__":
     set_global_seed(DEMO_SEED)
     # initial joint positions for Panda
-    initial_panda_qpos = np.array([-0.2, 0.2, 0.1, -2.0, 0.0, 1.5, 0.7])
+    initial_panda_qpos = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
     env = setup_env(initial_qpos=initial_panda_qpos, render=DEFAULT_RENDER_SWEEP)
 
     if DEMO_MODE == "default_loop":
