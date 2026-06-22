@@ -112,31 +112,31 @@ def get_default_estimator_params():
         },
         "drawer_position": {
             # "initial_depth": None,
-            "depth_prior": 0.8,
-            "initial_uncertainty_scale": 200,
-            "initial_uncertainty_xy": 0.2,
-            "initial_uncertainty_depth": 1.0,
-            "initial_uncertainty_xy_none": 0.1,
-            "initial_uncertainty_depth_none": 0.3,
+            "depth_prior": 0.8,# no need
+            "initial_uncertainty_scale": 200, # maybe no
+            "initial_uncertainty_xy": 0.2, # maybe no
+            "initial_uncertainty_depth": 1.0, # maybe no
+            "initial_uncertainty_xy_none": 0.1, # no need
+            "initial_uncertainty_depth_none": 0.3,# no need
             # "sample_init_mean": False,
-            "sample_init_mean_likelihood_threshold": 0.6,
-            "sample_init_mean_distance_threshold": 0.25,
-            "sample_init_mean_uncertainty_multiplier": 2.0,
+            "sample_init_mean_likelihood_threshold": 0.6, # no need
+            "sample_init_mean_distance_threshold": 0.25, # no need
+            "sample_init_mean_uncertainty_multiplier": 2.0, # no need
 
             "meas_noise_factor": 0.025,
             "visual_likelihood_steepness": 5.0,
             "R_add_scale": 5.0,
-            "measurement_nan_reject_scale": 0.01,
-            "forward_noise_grasped_coeff": 0.15, # When negative it will fail, else does not seem to matter much
-            "forward_noise_base": 0.005, # Seem to not matter at all
-            "grasped_update_R_scale": 0.03, # When negative, timestep is longer but it will still often succeed; when positive it does not seem to matter much
-            "grasped_outlier_rejection_threshold": 0.05, # Seem to not matter at all
+            "measurement_nan_reject_scale": 0.01, # no need
+            "forward_noise_grasped_coeff": 0.15, 
+            "forward_noise_base": 0.005, 
+            "grasped_update_R_scale": 0.03, 
+            "grasped_outlier_rejection_threshold": 0.05, 
             "measurement_existence_threshold": 0.5,
             "grasped_uncertainty_threshold": 0.1,
-            "missed_measurement_uncertainty_coeff": 0.1,
-            "absent_measurement_uncertainty_coeff": 0.1,
+            "missed_measurement_uncertainty_coeff": 0.1, # Can be grouped to one
+            "absent_measurement_uncertainty_coeff": 0.1, # Can be grouped to one
             "hand_change_recovery_time": 0.5,
-            "tf_lookup_timeout": 5.0,
+            "tf_lookup_timeout": 5.0, # no need
         },
         "kinematic_joint": {
             # "initial_rotation_xy": None,

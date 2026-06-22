@@ -142,8 +142,7 @@ class DrawerPositionEstimator(EstimationComponent):
                  grasped_outlier_rejection_threshold : float = 0.05,
                  measurement_existence_threshold : float = 0.5,
                  grasped_uncertainty_threshold : float = 0.1,
-                 missed_measurement_uncertainty_coeff : float = 0.1,
-                 absent_measurement_uncertainty_coeff : float = 0.1,
+                 missed_absent_measurement_uncertainty_coeff : float = 0.1,
                  hand_change_recovery_time : float = 0.5,
                  tf_lookup_timeout : float = 5.0,
                  initial_drawer_pos : Union[None, Iterable] = None):
@@ -214,8 +213,7 @@ class DrawerPositionEstimator(EstimationComponent):
         self.grasped_outlier_rejection_threshold = grasped_outlier_rejection_threshold
         self.measurement_existence_threshold = measurement_existence_threshold
         self.grasped_uncertainty_threshold = grasped_uncertainty_threshold
-        self.missed_measurement_uncertainty_coeff = missed_measurement_uncertainty_coeff
-        self.absent_measurement_uncertainty_coeff = absent_measurement_uncertainty_coeff
+        self.missed_absent_measurement_uncertainty_coeff = missed_absent_measurement_uncertainty_coeff
         
         super().__init__(name, connections, goals, dtype, device, mockbuild, no_differentiation,
                          prevent_loops_in_differentiation, max_length_differentiation_trace)
@@ -376,10 +374,10 @@ class DrawerPositionEstimator(EstimationComponent):
             if measurement_not_integrated and likelihood_existent_measurement > self.measurement_existence_threshold:
                 # visual measurements while grasped can be deceiving due to the hand being similarly blue
                 if likelihood_grasped_drawer < self.grasped_uncertainty_threshold:
-                    Sigma_new = Sigma + torch.eye(3, dtype=dtype, device=device) * self.missed_measurement_uncertainty_coeff * dt * likelihood_existent_measurement
+                    Sigma_new = Sigma + torch.eye(3, dtype=dtype, device=device) * self.missed_absent_measurement_uncertainty_coeff * dt * likelihood_existent_measurement
             elif (measurement_not_integrated) and (likelihood_existent_measurement < self.measurement_existence_threshold) and (not torch.all(torch.isnan(relative_position_in_CF_drawer))):
                 if likelihood_grasped_drawer < self.grasped_uncertainty_threshold and not likelihood_existent_measurement == 0.0:  # exactly zero means probbaly not fully initialized
-                    Sigma_new = Sigma + torch.eye(3, dtype=dtype, device=device) * self.absent_measurement_uncertainty_coeff * dt * (1.0 - likelihood_existent_measurement)
+                    Sigma_new = Sigma + torch.eye(3, dtype=dtype, device=device) * self.missed_absent_measurement_uncertainty_coeff * dt * (1.0 - likelihood_existent_measurement)
             return Sigma_new, mu_new
 
         def f_func(position_drawer, uncertainty_drawer, pose_ee, uncertainty_ee, relative_position_in_CF_drawer,
