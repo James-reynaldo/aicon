@@ -25,7 +25,8 @@ from aicon.drawer_tutorial.connections import (
 from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
 from aicon.middleware.python_sequential import build_components, run_component_sequence
 
-DEFAULT_RENDER_SWEEP = True
+
+DEFAULT_RENDER_SWEEP = False
 # Demo configuration: set mode to either "sweep" or "default_loop"
 # - "sweep": run the parameter sweep (existing behavior)
 # - "default_loop": run the environment repeatedly with default params
@@ -33,11 +34,11 @@ DEMO_MODE = "sweep"  # options: "sweep", "default_loop"
 # Delay between default-loop trials (seconds)
 DEFAULT_LOOP_DELAY = 1.0
 # Set to an integer for reproducible runs, or None to disable explicit seeding.
-DEMO_SEED = 123
+DEMO_SEED = None
 # If True, reseed before each trial so each trial starts from the same RNG state.
 RESEED_EACH_TRIAL = False
 # If True, only run the single parameter selected below.
-RUN_ONLY_SINGLE_PARAMETER = False
+RUN_ONLY_SINGLE_PARAMETER = True
 # Selected single-parameter sweep target.
 SINGLE_SWEEP_GROUP = "connection.DistGraspHandConnection"
 SINGLE_SWEEP_PARAM = "ft_noise_offset"
@@ -103,8 +104,8 @@ def get_default_estimator_params():
             "close_distance_threshold": 0.03,
             "uncertainty_dist_threshold": 0.25,
             "hand_change_time_threshold": 1.0,
-            "force_time_scale": 0.75,
-            "force_time_max": 2.25,
+            "force_time_scale": 6.0,
+            "force_time_max": 6.0,
             "low_likelihood_threshold": 0.1,
             "negative_innovation_threshold": -0.05,
             "negative_innovation_scale": 0.1,
@@ -163,7 +164,6 @@ def get_default_connection_params():
         "DistGraspHandConnection": {
             "dist_decay": 4.0,
             "close_dist_threshold": 0.03,
-            "force_threshold": 10.0,
             "ft_noise_offset": 5.0,
             "low_likelihood_threshold": 0.1,
             "gripper_activation_threshold": 0.5,
@@ -175,8 +175,8 @@ def get_default_connection_params():
             "uncertainty_scale_relevance": 20.0,
             "dist_sigmoid_scale": 5.0,
             "time_since_hand_change_threshold": 1.0,
-            "ft_tresh_multiplier": 0.75,
-            "ft_tresh_cap": 2.25,
+            "ft_tresh_multiplier": 6.0,
+            "ft_tresh_cap": 6.0,
         }
     }
 
@@ -213,7 +213,7 @@ def filter_single_parameter_sweeps(sweep_jobs, group_name, param_name):
     return [job for job in sweep_jobs if job["group_name"] == group_name and job["param_name"] == param_name]
 
 
-def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_label="", group_name="", param_name="", sweep_value=None, stop_on_done=True, reset_on_start=True):
+def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_label="", group_name="", param_name="", sweep_value=None, stop_on_done=True, reset_on_start=True, random_init_time=0.0, random_std=0.1):
     if reset_on_start:
         env.reset()
 
@@ -235,6 +235,7 @@ def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_lab
     stop_actual_grasped = False
     step_idx = 1
     # If max_timesteps is provided, limit the loop; otherwise run until env signals done.
+    rng = np.random.default_rng()  # create RNG for optional random actions during initial exploration
     while True:
         run_component_sequence(components, torch.tensor(curr_t))
         curr_commanded_vel = gripper_velo.quantities["action_velo_ee"]
@@ -244,6 +245,13 @@ def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_lab
             [curr_commanded_vel.cpu().numpy(), np.zeros(3), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
         )
 
+        # If t < random_init_time, override action with random values for exploration at the start of the episode
+        if curr_t < random_init_time:
+            action = np.concatenate([
+                rng.uniform(-random_std, random_std, size=3),  # random EE velocity
+                np.zeros(3),                       # no rotation
+                [0]              # don't activate gripper during random init
+            ])
         _, rew, done, _ = env.step(action)
         base_env = env.env if hasattr(env, "env") else env
         true_joint_state = float(base_env.sim.data.qpos[base_env.cabinet_qpos_addrs])
@@ -299,6 +307,26 @@ def save_sweep_results(records, save_path):
         writer.writerows(records)
 
 
+def save_sweep_summary(summary, save_path):
+    """Save summary of success rates per parameter."""
+    fieldnames = [
+        "param_group",
+        "param_name",
+        "standard_value",
+        "sweep_label",
+        "sweep_value",
+        "successes",
+        "total_runs",
+        "success_rate",
+        "average_timesteps",
+        "average_stop_joint_error",
+    ]
+    with open(save_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(summary)
+
+
 def main(env, max_timesteps_per_trial=500, render=False, rec_save_path=None):
     env.reset()
 
@@ -337,72 +365,123 @@ def main(env, max_timesteps_per_trial=500, render=False, rec_save_path=None):
         if not sweep_jobs:
             raise ValueError(f"No sweep jobs matched {SINGLE_SWEEP_GROUP}.{SINGLE_SWEEP_PARAM}")
     results = []
+    summary = []
+    
+    num_runs_per_param = 5
 
-    print(f"\nStarting sweep: {len(sweep_jobs)} trials, timeout={max_timesteps_per_trial} timesteps per trial")
+    print(f"\nStarting sweep: {len(sweep_jobs)} parameters, {num_runs_per_param} runs per parameter, timeout={max_timesteps_per_trial} timesteps per trial")
 
-    for trial_index, job in enumerate(sweep_jobs, start=1):
-        if DEMO_SEED is not None and RESEED_EACH_TRIAL:
-            set_global_seed(DEMO_SEED)
+    for param_index, job in enumerate(sweep_jobs, start=1):
         group_name = job["group_name"]
         param_name = job["param_name"]
         sweep_label = job["sweep_label"]
         sweep_value = job["sweep_value"]
         print(
-            f"Currently sweeping [{trial_index:03d}/{len(sweep_jobs):03d}]: "
+            f"Currently sweeping [{param_index:03d}/{len(sweep_jobs):03d}]: "
             f"{group_name}.{param_name} -> {sweep_label} ({sweep_value})",
             flush=True,
         )
+        
+        successes = 0
+        total_timesteps = 0
+        total_stop_joint_error = 0.0
+        stop_joint_error_count = 0
+        # Run this parameter 5 times
+        for run_num in range(1, num_runs_per_param + 1):
+            trial_index = (param_index - 1) * num_runs_per_param + run_num
+            
+            if DEMO_SEED is not None and RESEED_EACH_TRIAL:
+                set_global_seed(DEMO_SEED)
 
-        error_text = ""
-        success = False
-        timesteps = max_timesteps_per_trial
-        stop_joint_error = float("nan")
-        stop_grasp_estimate = float("nan")
-        stop_actual_grasped = False
-        try:
-            success, timesteps, stop_joint_error, stop_grasp_estimate, stop_actual_grasped = run_trial(
-                env,
-                estimator_params=job["trial_params"],
-                max_timesteps=max_timesteps_per_trial,
-                render=render,
-                sweep_label=sweep_label,
-                group_name=group_name,
-                param_name=param_name,
-                sweep_value=sweep_value,
-            )
-        except Exception as exc:
-            error_text = str(exc)
+            error_text = ""
             success = False
             timesteps = max_timesteps_per_trial
             stop_joint_error = float("nan")
             stop_grasp_estimate = float("nan")
             stop_actual_grasped = False
+            try:
+                success, timesteps, stop_joint_error, stop_grasp_estimate, stop_actual_grasped = run_trial(
+                    env,
+                    estimator_params=job["trial_params"],
+                    max_timesteps=max_timesteps_per_trial,
+                    render=render,
+                    sweep_label=sweep_label,
+                    group_name=group_name,
+                    param_name=param_name,
+                    sweep_value=sweep_value,
+                )
+            except Exception as exc:
+                error_text = str(exc)
+                success = False
+                timesteps = max_timesteps_per_trial
+                stop_joint_error = float("nan")
+                stop_grasp_estimate = float("nan")
+                stop_actual_grasped = False
 
-        results.append(
+            if success:
+                successes += 1
+            if not np.isnan(timesteps):
+                total_timesteps += timesteps
+            if not np.isnan(stop_joint_error):
+                total_stop_joint_error += stop_joint_error
+                stop_joint_error_count += 1
+            
+            results.append(
+                {
+                    "trial_index": trial_index,
+                    "param_group": group_name,
+                    "param_name": param_name,
+                    "standard_value": job["standard_value"],
+                    "sweep_label": sweep_label,
+                    "sweep_value": sweep_value,
+                    "success": int(success),
+                    "timesteps": timesteps,
+                    "timeout_timesteps": max_timesteps_per_trial,
+                    "stop_joint_error_est_minus_true": stop_joint_error,
+                    "stop_grasp_estimate": stop_grasp_estimate,
+                    "stop_actual_grasped": int(stop_actual_grasped),
+                    "error": error_text,
+                }
+            )
+            print(f"    Run {run_num}/{num_runs_per_param}: {'Success' if success else 'Failed'}", flush=True)
+        
+        # Calculate and report success rate for this parameter
+        success_rate = successes / num_runs_per_param
+        average_timesteps = total_timesteps / num_runs_per_param
+        average_stop_joint_error = total_stop_joint_error / stop_joint_error_count if stop_joint_error_count > 0 else float("nan")
+        summary.append(
             {
-                "trial_index": trial_index,
                 "param_group": group_name,
                 "param_name": param_name,
                 "standard_value": job["standard_value"],
                 "sweep_label": sweep_label,
                 "sweep_value": sweep_value,
-                "success": int(success),
-                "timesteps": timesteps,
-                "timeout_timesteps": max_timesteps_per_trial,
-                "stop_joint_error_est_minus_true": stop_joint_error,
-                "stop_grasp_estimate": stop_grasp_estimate,
-                "stop_actual_grasped": int(stop_actual_grasped),
-                "error": error_text,
+                "successes": successes,
+                "total_runs": num_runs_per_param,
+                "success_rate": success_rate,
+                "average_timesteps": average_timesteps,
+                "average_stop_joint_error": average_stop_joint_error,
             }
+        )
+        print(
+            f"  Success rate: {successes}/{num_runs_per_param} = {success_rate*100:.1f}% | "
+            f"avg timesteps: {average_timesteps:.1f} | "
+            f"avg stop joint err: {average_stop_joint_error:.6f}\n",
+            flush=True,
         )
 
     if rec_save_path is None:
         rec_save_path = str(Path(__file__).with_name("sweep_results.csv"))
     save_sweep_results(results, rec_save_path)
+    
+    # Save summary with success rates
+    summary_save_path = str(Path(__file__).with_name("sweep_summary.csv"))
+    save_sweep_summary(summary, summary_save_path)
 
     total_success = sum(r["success"] for r in results)
     print(f"\nSweep complete. Successes: {total_success}/{len(results)}")
     print(f"Results saved to: {rec_save_path}")
+    print(f"Summary saved to: {summary_save_path}")
 
 def run_demo(render=DEFAULT_RENDER_SWEEP, max_timesteps_per_trial=500):
     set_global_seed(DEMO_SEED)

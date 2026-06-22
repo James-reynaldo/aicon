@@ -116,7 +116,6 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
     def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False,
             dist_decay: float = 4.0,
             close_dist_threshold: float = 0.03,
-            force_threshold: float = 10.0,
             ft_noise_offset: float = 5.0,
             low_likelihood_threshold: float = 0.1,
             gripper_activation_threshold: float = 0.5,
@@ -128,8 +127,8 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             uncertainty_scale_relevance: float = 20.0,
             dist_sigmoid_scale: float = 5.0,
             time_since_hand_change_threshold: float = 1.0,
-            ft_tresh_multiplier: float = 0.75,
-            ft_tresh_cap: float = 2.25):
+            ft_tresh_multiplier: float = 6.0,
+            ft_tresh_cap: float = 6.0):
         super().__init__(name, {"distance_ee_drawer": (2,), "uncertainty_dist": (1,),
                     "likelihood_grasped_drawer": (1,), "gripper_activation": (1,), "ee_force_mag_meas": (1,),
                     "time_since_hand_change": (2,),}, dtype=dtype,
@@ -137,7 +136,6 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
         # expose internal hyperparameters as instance attributes so they can be swept
         self.dist_decay = dist_decay
         self.close_dist_threshold = close_dist_threshold
-        self.force_threshold = force_threshold
         self.ft_noise_offset = ft_noise_offset
         self.low_likelihood_threshold = low_likelihood_threshold
         self.gripper_activation_threshold = gripper_activation_threshold
@@ -159,6 +157,8 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
                 max=1.0,
             )
             innovation_from_uncertainty = likelihood_given_uncertainty - likelihood_grasped_drawer
+
+            print(f"dist_sigmoid_scale: {self.dist_sigmoid_scale}")
 
             dist_relevance = (
                 1 - torch.sigmoid((distance_ee_drawer[1] - 0.5) * self.dist_sigmoid_scale)
@@ -377,7 +377,7 @@ class KinematicJointConnection(ActiveInterconnection):
                                             torch.cos(elevation)], dim=0)
             translation = orientation_vector * state
             predicted_point = initial_point + translation
-            # print(f"KJC Predicted drawer position: {predicted_point}, actual drawer position: {position_drawer}")
+            print(f"KJC Predicted drawer position: {predicted_point}, actual drawer position: {position_drawer}")
             return predicted_point - position_drawer
 
         return connection_func

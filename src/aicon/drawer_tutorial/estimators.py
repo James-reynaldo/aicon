@@ -527,8 +527,8 @@ class GraspedEstimator(EstimationComponent):
                  close_distance_threshold: float = 0.03,
                  uncertainty_dist_threshold: float = 0.25,
                  hand_change_time_threshold: float = 1.0,
-                 force_time_scale: float = 0.75,
-                 force_time_max: float = 2.25,
+                 force_time_scale: float = 6.0,
+                 force_time_max: float = 6.0,
                  low_likelihood_threshold: float = 0.1,
                  negative_innovation_threshold: float = -0.05,
                  negative_innovation_scale: float = 0.1):
@@ -628,6 +628,7 @@ class GraspedEstimator(EstimationComponent):
             force_magnitude = torch.norm(ee_force_mag_meas)
             if (distance_ee_drawer[0] < self.close_distance_threshold and uncertainty_dist < self.uncertainty_dist_threshold and time_since_hand_change[0] > self.hand_change_time_threshold) or (gripper_activation > self.gripper_activation_threshold):
                 FT_tresh = torch.minimum(time_since_hand_change[1] * self.force_time_scale, torch.ones_like(time_since_hand_change[1]) * self.force_time_max)
+                print("FT_tresh:", FT_tresh.item())
                 likelihood_from_hand_and_force = torch.clip(1 - torch.exp(-(force_magnitude - FT_tresh)), 0, 1) * gripper_activation
                 if (likelihood_grasped_drawer < self.low_likelihood_threshold) and (likelihood_from_hand_and_force < self.low_likelihood_threshold) and (gripper_activation > self.gripper_activation_threshold):
                     likelihood_from_hand_and_force = (likelihood_from_hand_and_force.detach() -

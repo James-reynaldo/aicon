@@ -5,8 +5,8 @@ import lovely_tensors as lt
 import numpy as np
 import robosuite as suite
 import torch
-# from robosuite.devices import Keyboard, SpaceMouse
-# from robosuite.utils.input_utils import input2action
+from robosuite.devices import Keyboard, SpaceMouse
+from robosuite.utils.input_utils import input2action
 from robosuite.utils.transform_utils import quat2mat
 from robosuite.wrappers import VisualizationWrapper
 
@@ -14,7 +14,7 @@ from aicon.drawer_tutorial.experiment_specifications import get_building_functio
 
 # Disturbance configuration for periodic jerks
 DISTURBANCE_INTERVAL = 1.0
-DISTURBANCE_MAGNITUDE = 5
+DISTURBANCE_MAGNITUDE = 0
 
 # Import our custom environment
 from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
@@ -22,7 +22,7 @@ from aicon.middleware.python_sequential import build_components, run_component_s
 
 
 def setup_env(device_type, initial_qpos=None):
-    # device = Keyboard(pos_sensitivity=1, rot_sensitivity=1)
+    device = Keyboard(pos_sensitivity=1, rot_sensitivity=1)
     # Create our custom environment
     env = DrawerOpenEnv(
         robots="Panda",
@@ -39,15 +39,15 @@ def setup_env(device_type, initial_qpos=None):
 
     env = VisualizationWrapper(env)
     env.reset()
-    # device.start_control()
-    return env
-    # return env, device
+    device.start_control()
+    # return env
+    return env, device
 
 
-def main(env, rec_save_path=None):
+def main(device, env, rec_save_path=None):
     env.reset()
     robot = env.robots[0]
-    # device.start_control()
+    device.start_control()
 
     # Print debug information about the drawer
     env.env.print_debug_info()
@@ -70,6 +70,13 @@ def main(env, rec_save_path=None):
     components = build_components(component_building_functions)
     gripper_component = components["GripperAction"]
     gripper_velo = components["EEVelocities"]
+    
+    # Track first gripper close attempt
+    gripper_close_threshold = 0.5
+    first_gripper_close_triggered = False
+    pullback_start_time = None
+    pullback_duration = 0.5  # Duration in seconds for the pull-back
+    prev_gripper_activation = 0
 
     # Helper: map quantities to connection functions by inspecting connection function signatures
     def _connections_for_quantity(quantity_name):
@@ -139,6 +146,23 @@ def main(env, rec_save_path=None):
         commanded_action = np.concatenate(
             [curr_commanded_vel.cpu().numpy(), np.zeros(3), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
         )
+        
+        # Detect first gripper close attempt and apply pull-back
+        gripper_activation_val = curr_commanded_gripper.squeeze().cpu().numpy()
+        if not first_gripper_close_triggered and gripper_activation_val > gripper_close_threshold and prev_gripper_activation <= gripper_close_threshold:
+            # First gripper close detected! Apply pull-back in negative y direction
+            print(f"\n*** FIRST GRIPPER CLOSE DETECTED at t={curr_t:.3f}! Applying pull-back in -Y direction for {pullback_duration}s ***\n")
+            first_gripper_close_triggered = True
+            pullback_start_time = curr_t
+        
+        # Apply pull-back if we're within the pull-back duration
+        if pullback_start_time is not None and curr_t - pullback_start_time < pullback_duration:
+            # Apply strong pull-back in negative y direction (index 1 of velocity)
+            commanded_action[1] = -1.0  # Pull back in y direction with strong velocity
+            if curr_t - pullback_start_time < 0.1:  # Print message only in first 100ms
+                print(f"Applying pull-back at t={curr_t:.3f}")
+        
+        prev_gripper_activation = gripper_activation_val
 
         # if curr_t < 1.5:
         #     action, _ = input2action(
@@ -157,6 +181,9 @@ def main(env, rec_save_path=None):
 
         action = commanded_action + disturbance
 
+        # action, _ = input2action(
+        #     device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
+        # )
         obs, rew, done, info = env.step(action)
 
         # Print current drawer position estimate from the estimator (if available)
@@ -204,7 +231,7 @@ def main(env, rec_save_path=None):
                     vl = vis_like.cpu().numpy()
                 except Exception:
                     vl = vis_like
-                print(f"Visibility likelihood at t={curr_t:.3f}: {vl}")
+                # print(f"Visibility likelihood at t={curr_t:.3f}: {vl}")
 
         grasp_comp = components.get("GraspLikelihoodEstimator")
         if grasp_comp is not None:
@@ -214,7 +241,7 @@ def main(env, rec_save_path=None):
                     gl = grasp_like.cpu().numpy()
                 except Exception:
                     gl = grasp_like
-                # print(f"Grasp likelihood: {gl}")
+                print(f"Grasp likelihood: {gl}")
 
         # print(f"Robot joint state at t={curr_t:.3f}: {obs['robot0_joint_pos']}")
 
@@ -233,8 +260,8 @@ def run_demo():
     # initial_panda_qpos = None
 
     # Pass the initial pose to the setup function
-    env = setup_env("keyboard", initial_qpos=initial_panda_qpos)
-    main(env)
+    env,device = setup_env("keyboard", initial_qpos=initial_panda_qpos)
+    main(device, env)
 
 
 if __name__ == "__main__":
