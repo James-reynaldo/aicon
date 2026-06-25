@@ -8,7 +8,8 @@ from aicon.middleware.python_sequential import build_components, run_component_s
 
 NUM_TRIALS_PER_JOB = 3
 RANDOM_INIT_TIME = 0.5  # seconds of random movement at start
-RENDER = True
+RENDER = False
+MAX_TIMESTEPS = 1000
 
 
 # reuse your existing functions (copy them from current file)
@@ -61,7 +62,7 @@ def main(job_index: int):
             success, timesteps, err, grasp, grasped = run_trial(
                 env,
                 estimator_params=job["trial_params"],
-                max_timesteps=500,
+                max_timesteps=MAX_TIMESTEPS,
                 render=RENDER,
                 sweep_label=job["sweep_label"],
                 group_name=job["group_name"],

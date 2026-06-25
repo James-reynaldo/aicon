@@ -1,11 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=AICON_Single_Param_Sweep
-#SBATCH --cpus-per-task=2
-#SBATCH --partition=c0,c1a,c1b
-#SBATCH --mem-per-cpu=6G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=8G
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/%A_%a.out
-#SBATCH --array=0-10000%200
+#SBATCH --array=476-489%200
 
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate domip2
@@ -25,5 +24,5 @@ export OPENBLAS_NUM_THREADS=1
 
 # Ensure logs directory exists and run Python, saving a per-job .out file
 mkdir -p logs
-python -u gridsearch.py "$JOB_ID" 
+python -u Sweep_hpc.py "$JOB_ID" 
 

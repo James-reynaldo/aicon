@@ -17,8 +17,9 @@ from Sweep import (
     run_trial
 )
 
-RENDER = True
+RENDER = False
 NUM_TRIALS_PER_JOB = 3
+MAX_TIMESTEPS = 1000
 
 def get_default_estimator_params():
     return {
@@ -80,7 +81,7 @@ def get_default_estimator_params():
             "grasped_outlier_rejection_threshold": 0.05, 
             "measurement_existence_threshold": 0.5,
             "grasped_uncertainty_threshold": 0.1,
-            "missed_absent_measurement_uncertainty_coeff": 0.1, 
+            # "missed_absent_measurement_uncertainty_coeff": 0.1, 
             # "hand_change_recovery_time": 0.5, # no need
             # "tf_lookup_timeout": 5.0, # no need
         },
@@ -302,7 +303,7 @@ def main(job_index:int):
             success, timesteps, err, grasp, grasped = run_trial(
                 env,
                 estimator_params=job["trial_params"],
-                max_timesteps=10,
+                max_timesteps=MAX_TIMESTEPS,
                 render=RENDER,
                 sweep_label=job["sweep_label"],
                 group_name=job["group_name"],
