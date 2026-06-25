@@ -122,7 +122,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                          goals={"ReduceJointStateDifference": lambda d, t,
                                                                                                             mockbuild=False: DrawerOpenViaJointGoal(
                                                                              is_active=True, dtype=t, device=d,
-                                                                             mockbuild=mockbuild, open_value=-0.03)},
+                                                                             mockbuild=mockbuild, open_value=-0.5)},
                                                                          **estimator_params.get("kinematic_joint", {}),
                                                                          )
     }

@@ -1,19 +1,29 @@
 #!/bin/bash
 #SBATCH --job-name=AICON_Single_Param_Sweep
-#SBATCH --partition=c2
-#SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=8G
+#SBATCH --cpus-per-task=2
+#SBATCH --partition=c0,c1a,c1b
+#SBATCH --mem-per-cpu=6G
 #SBATCH --time=01:00:00
-#SBATCH --output=Sweep.out
+#SBATCH --output=logs/%A_%a.out
+#SBATCH --array=0-10000%200
 
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate domip2
 
-export PYTHONPATH=/scratch/aldo/drawer_tutorial:/scratch/aldo/drawer_tutorial/aicon/robosuite/robosuite-task-zoo:$PYTHONPATH
+export PYTHONPATH=/scratch/aldo/aicon/src/aicon/drawer_tutorial:/scratch/aldo/aicon/robosuite/robosuite-task-zoo:$PYTHONPATH
+
+# Accept an optional job id as the first argument; prefer SLURM array task id, then SLURM_JOB_ID
+JOB_ID=${1:-${SLURM_ARRAY_TASK_ID:-${SLURM_JOB_ID}}}
+JOB_ID=$((JOB_ID))
+export JOB_ID
+
+echo "Running job with ID: $JOB_ID"
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
-export PYTHONHASHSEED=0
+export OPENBLAS_NUM_THREADS=1
 
-python -u Sweep.py
+# Ensure logs directory exists and run Python, saving a per-job .out file
+mkdir -p logs
+python -u gridsearch.py "$JOB_ID" 
 
