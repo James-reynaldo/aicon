@@ -133,8 +133,7 @@ def get_default_estimator_params():
             "grasped_outlier_rejection_threshold": 0.05, 
             "measurement_existence_threshold": 0.5,
             "grasped_uncertainty_threshold": 0.1,
-            "missed_measurement_uncertainty_coeff": 0.1, # Can be grouped to one
-            "absent_measurement_uncertainty_coeff": 0.1, # Can be grouped to one
+            "missed_absent_measurement_uncertainty_coeff": 0.1, # Can be grouped to one
             "hand_change_recovery_time": 0.5,
             "tf_lookup_timeout": 5.0, # no need
         },
