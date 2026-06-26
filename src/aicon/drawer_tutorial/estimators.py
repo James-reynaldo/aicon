@@ -68,6 +68,7 @@ class EEPoseEstimator(EstimationComponent):
             Returns:
                 tuple: Updated pose and uncertainty estimates
             """
+            print(f"[EEPoseEstimator] EE pose measurement: {ee_pos_meas}")
             mu_pred, Sigma_pred = predict_ekf_other_quantity(c_action, pose_ee, uncertainty_ee, action_velo_ee,
                                                              torch.zeros(3, 3, dtype=self.dtype, device=self.device),
                                                              torch.eye(6, dtype=self.dtype, device=self.device) * self.action_process_noise)

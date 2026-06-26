@@ -14,7 +14,8 @@ from aicon.drawer_tutorial.goals import DrawerOpenViaJointGoal, DrawerUncertaint
 from aicon.drawer_tutorial.sensors import BearingSensor, DrawerPoseSenser, EEForceSensor, EEPoseSensor
 
 
-def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params=None, connection_params=None):
+def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params=None, connection_params=None,
+                                               noise_scale: float = 0.0):
     """
     Builds the connections and components for the basic drawer motion experiment.
     """
@@ -32,25 +33,25 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                      ("GraspedLikelihood",)},
                                                         device=torch.device("cpu"),
                                                         dtype=torch.double, mockbuild=mockbuild,
-                                                        sim_env_pointer=sim_env_pointer),
+                                                        sim_env_pointer=sim_env_pointer, noise_scale=noise_scale),
         "EEPosSensor": lambda mockbuild: EEPoseSensor("EEPosSensor",
                                                         connections={k: connection_builders[k] for k in
                                                                      ("DirectMeasurement",)},
                                                         device=torch.device("cpu"),
                                                         dtype=torch.double, mockbuild=mockbuild,
-                                                        sim_env_pointer=sim_env_pointer),
+                                                        sim_env_pointer=sim_env_pointer, noise_scale=noise_scale),
         "DrawerPosSensor": lambda mockbuild: DrawerPoseSenser("DrawerPosSensor",
                                                         connections={k: connection_builders[k] for k in
                                                                      ("DrawerDirectMeasurement",)},
                                                         device=torch.device("cpu"),
                                                         dtype=torch.double, mockbuild=mockbuild,
-                                                        sim_env_pointer=sim_env_pointer),
+                                                        sim_env_pointer=sim_env_pointer, noise_scale=noise_scale),
         "BearingSensor": lambda mockbuild: BearingSensor("BearingSensor",
                                 connections={k: connection_builders[k] for k in
                                          ("ProjectiveGeometry",)},
                                 device=torch.device("cpu"),
                                 dtype=torch.double, mockbuild=mockbuild,
-                                sim_env_pointer=sim_env_pointer),
+                                sim_env_pointer=sim_env_pointer, noise_scale=noise_scale),
         "EEVelocities": lambda mockbuild: VeloEEAction("EEVelocities",
                                                        connections={k: connection_builders[k] for k in
                                                                     ("ForwardKinematics",)},

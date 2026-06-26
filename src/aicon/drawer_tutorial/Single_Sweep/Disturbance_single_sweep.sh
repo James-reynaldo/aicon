@@ -4,7 +4,7 @@
 #SBATCH --mem-per-cpu=8G
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/%A_%a.out
-#SBATCH --array=476-489%200
+#SBATCH --array=0-475%200
 
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate domip2
@@ -24,5 +24,5 @@ export OPENBLAS_NUM_THREADS=1
 
 # Ensure logs directory exists and run Python, saving a per-job .out file
 mkdir -p logs
-python -u Sweep_hpc.py "$JOB_ID" 
+python -u Sweep_hpc.py "$JOB_ID" 1
 

@@ -41,7 +41,7 @@ def get_all_jobs():
     return jobs_est + jobs_conn
 
 
-def main(job_index: int):
+def main(job_index: int, disturbance: float = None, noise_scale: float = None):
     jobs = get_all_jobs()
     # print(total_jobs := len(jobs), "total jobs")
     if job_index < 0 or job_index >= len(jobs):
@@ -59,6 +59,7 @@ def main(job_index: int):
 
     try:
         for run in range(NUM_TRIALS_PER_JOB):
+            set_global_seed(run)  # set seed for reproducibility
             success, timesteps, err, grasp, grasped = run_trial(
                 env,
                 estimator_params=job["trial_params"],
@@ -70,6 +71,8 @@ def main(job_index: int):
                 sweep_value=job["sweep_value"],
                 random_init_time=RANDOM_INIT_TIME,
                 random_std=1,
+                disturbance=disturbance,
+                noise_scale=noise_scale
             )
 
             results.append((
@@ -92,8 +95,13 @@ def main(job_index: int):
     # save per-job result
     import csv
     from pathlib import Path
-
-    out_file = Path("results") / f"job_{job_index}.csv"
+    
+    if disturbance is not None:
+        out_file = Path("results_disturbance") / f"j_{job_index}_d_{disturbance}.csv"
+    elif noise_scale is not None:
+        out_file = Path("results_noise") / f"j_{job_index}_n_{noise_scale}.csv"
+    else:
+        out_file = Path("results") / f"j_{job_index}.csv"
     out_file.parent.mkdir(exist_ok=True)
 
     with open(out_file, "w") as f:
@@ -112,4 +120,6 @@ def main(job_index: int):
 
 if __name__ == "__main__":
     idx = int(sys.argv[1])
-    main(idx)
+    disturbance = float(sys.argv[2]) if len(sys.argv) > 2 else None
+    noise_scale = float(sys.argv[3]) if len(sys.argv) > 3 else None
+    main(idx, disturbance=disturbance, noise_scale=noise_scale)

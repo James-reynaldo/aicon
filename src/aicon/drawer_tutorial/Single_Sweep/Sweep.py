@@ -212,7 +212,9 @@ def filter_single_parameter_sweeps(sweep_jobs, group_name, param_name):
     return [job for job in sweep_jobs if job["group_name"] == group_name and job["param_name"] == param_name]
 
 
-def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_label="", group_name="", param_name="", sweep_value=None, stop_on_done=True, reset_on_start=True, random_init_time=0.0, random_std=0.1):
+def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_label="", group_name="", 
+              param_name="", sweep_value=None, stop_on_done=True, reset_on_start=True, random_init_time=0.0, 
+              random_std=0.1, disturbance=None, noise_scale=0.0):
     if reset_on_start:
         env.reset()
 
@@ -220,7 +222,7 @@ def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_lab
     connection_params = estimator_params.pop("connection_params", None) if isinstance(estimator_params, dict) else None
 
     component_building_functions, _, _ = get_building_functions_basic_drawer_motion(
-        env, estimator_params=estimator_params, connection_params=connection_params
+        env, estimator_params=estimator_params, connection_params=connection_params, noise_scale=noise_scale
     )
     components = build_components(component_building_functions)
     gripper_component = components["GripperAction"]
@@ -234,7 +236,8 @@ def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_lab
     stop_actual_grasped = False
     step_idx = 1
     # If max_timesteps is provided, limit the loop; otherwise run until env signals done.
-    rng = np.random.default_rng()  # create RNG for optional random actions during initial exploration
+    # Reuse NumPy's global RNG seeded by set_global_seed() instead of creating a new default_rng()
+    rng = np.random
     while True:
         run_component_sequence(components, torch.tensor(curr_t))
         curr_commanded_vel = gripper_velo.quantities["action_velo_ee"]
@@ -251,6 +254,9 @@ def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_lab
                 np.zeros(3),                       # no rotation
                 [0]              # don't activate gripper during random init
             ])
+        # Make 10% of the time, apply a random disturbance to translation part of the action
+        if disturbance is not None and rng.rand() < 0.1:
+            action[:3] += rng.uniform(-disturbance, disturbance, size=3)
         _, rew, done, _ = env.step(action)
         base_env = env.env if hasattr(env, "env") else env
         true_joint_state = float(base_env.sim.data.qpos[base_env.cabinet_qpos_addrs])

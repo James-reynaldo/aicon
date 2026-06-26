@@ -24,7 +24,8 @@ class DrawerPoseSenser(SensorComponent):
 
     def __init__(self, name: str, connections: Dict[str, ActiveInterconnection],
                  dtype: Union[torch.dtype, None] = None,
-                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None):
+                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None,
+                noise_level: float = 0.001, noise_scale: float = 0.0):
         """
         Initialize the drawer pose sensor.
         
@@ -35,8 +36,12 @@ class DrawerPoseSenser(SensorComponent):
             device: Device for computations
             mockbuild: Whether to run in mock build mode
             sim_env_pointer: Pointer to the simulation environment to get measurements from.
+            noise_level: Standard deviation of Gaussian noise
+            noise_scale: Scale factor for the noise
         """
         self.sim_env_pointer = sim_env_pointer
+        self.noise_scale = noise_scale
+        self.noise_level = noise_level
         super().__init__(name, connections, dtype, device, mockbuild=mockbuild)
 
     def obtain_measurements(self) -> bool:
@@ -48,6 +53,11 @@ class DrawerPoseSenser(SensorComponent):
         """
         drawer_pos = self.sim_env_pointer.env.get_drawer_handle_pos()
         curr_sim_time = self.sim_env_pointer.get_sim_time()
+
+        # Add noise if enabled
+        if self.noise_scale > 0:
+            noise = torch.randn(self.state_dim, dtype=self.dtype or torch.float32, device=self.device or torch.device("cpu")) * self.noise_level * self.noise_scale
+            drawer_pos = drawer_pos + noise.cpu().numpy() if isinstance(drawer_pos, np.ndarray) else drawer_pos + noise
 
         self.timestamp = torch.tensor(curr_sim_time)
         self.quantities["drawer_pos_meas"] = drawer_pos
@@ -69,8 +79,11 @@ class EEPoseSensor(SensorComponent):
 
     def __init__(self, name: str, connections: Dict[str, ActiveInterconnection],
                  dtype: Union[torch.dtype, None] = None,
-                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None):
+                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None,
+                noise_level: float = 0.001, noise_scale: float = 0.0):
         self.sim_env_pointer = sim_env_pointer
+        self.noise_level = noise_level
+        self.noise_scale = noise_scale
         super().__init__(name, connections, dtype, device, mockbuild=mockbuild)
 
     def obtain_measurements(self) -> bool:
@@ -80,8 +93,14 @@ class EEPoseSensor(SensorComponent):
             bool: True if measurements were successfully obtained.
         """
         ee_pos_np = self.sim_env_pointer.env.get_ee_pose()
-        # print(f"EEPS obtained ee_pos: {ee_pos_np}")
+        print(f"EEPS obtained ee_pos: {ee_pos_np}")
         curr_sim_time = self.sim_env_pointer.get_sim_time()
+        
+        # Add noise if enabled
+        if self.noise_scale > 0:
+            noise = torch.randn(self.state_dim, dtype=self.dtype or torch.float32, device=self.device or torch.device("cpu")) * self.noise_level * self.noise_scale
+            ee_pos_np = ee_pos_np + noise.cpu().numpy() if isinstance(ee_pos_np, np.ndarray) else ee_pos_np + noise
+        
         self.timestamp = torch.tensor(curr_sim_time)
         self.quantities["ee_pos_meas"] = torch.tensor(ee_pos_np, dtype=self.dtype, device=self.device)
         return True
@@ -99,9 +118,12 @@ class BearingSensor(SensorComponent):
 
     def __init__(self, name: str, connections: Dict[str, ActiveInterconnection],
                  dtype: Union[torch.dtype, None] = None,
-                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None):
+                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None,
+                noise_level: float = 0.005, noise_scale: float = 0.0):
         self.sim_env_pointer = sim_env_pointer
         self.H_ee_to_cam = torch.eye(4, dtype=dtype or torch.float64, device=device or torch.device("cpu"))
+        self.noise_scale = noise_scale
+        self.noise_level = noise_level
         super().__init__(name, connections, dtype, device, mockbuild=mockbuild)
 
     def obtain_measurements(self) -> bool:
@@ -127,7 +149,14 @@ class BearingSensor(SensorComponent):
         # print(f"[BearingSensor t={_ts}] H_ee_to_cam: {_h}")
         # also print the H_ee_to_cam used by the sensor so we can detect frame mismatches
         # store processed sine-of-angles bearing for estimator use
-        self.quantities["relative_position_in_CF_drawer"] = get_sine_of_angles(relative_pos_in_cf_drawer)
+        bearing = get_sine_of_angles(relative_pos_in_cf_drawer)
+        
+        # Add noise if enabled
+        if self.noise_scale > 0:
+            noise = torch.randn(self.state_dim, dtype=self.dtype, device=self.device) * self.noise_level * self.noise_scale
+            bearing = bearing + noise
+        
+        self.quantities["relative_position_in_CF_drawer"] = bearing
         return True
 
     def initial_definitions(self):
@@ -141,8 +170,11 @@ class EEForceSensor(SensorComponent):
 
     def __init__(self, name: str, connections: Dict[str, ActiveInterconnection],
                  dtype: Union[torch.dtype, None] = None,
-                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None):
+                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None,
+                 noise_level: float = 0.05, noise_scale: float = 0.0):
         self.sim_env_pointer = sim_env_pointer
+        self.noise_scale = noise_scale
+        self.noise_level = noise_level
         super().__init__(name, connections, dtype, device, mockbuild=mockbuild)
 
     def obtain_measurements(self) -> bool:
@@ -153,6 +185,12 @@ class EEForceSensor(SensorComponent):
         """
         ee_force_mag_np = self.sim_env_pointer.get_ee_force_magnitude()
         curr_sim_time = self.sim_env_pointer.get_sim_time()
+        
+        # Add noise if enabled (force sensors typically have higher noise)
+        if self.noise_scale > 0:
+            noise = np.random.randn(1) * self.noise_level * self.noise_scale
+            ee_force_mag_np = ee_force_mag_np + noise[0]
+        
         self.timestamp = torch.tensor(curr_sim_time)
         self.quantities["ee_force_mag_meas"] = torch.tensor([ee_force_mag_np], dtype=self.dtype, device=self.device)
         return True
@@ -171,8 +209,11 @@ class GripperStateSensor(SensorComponent):
 
     def __init__(self, name: str, connections: Dict[str, ActiveInterconnection],
                  dtype: Union[torch.dtype, None] = None,
-                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None):
+                 device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None,
+                 noise_level: float = 0.002, noise_scale: float = 0.0):
         self.sim_env_pointer = sim_env_pointer
+        self.noise_scale = noise_scale
+        self.noise_level = noise_level
         super().__init__(name, connections, dtype, device, mockbuild=mockbuild)
 
     def obtain_measurements(self) -> bool:
@@ -193,6 +234,11 @@ class GripperStateSensor(SensorComponent):
                  gripper_qpos_np = gripper_qpos_np[:self.state_dim]
              else: # Pad with zeros if too few - might need better handling
                  gripper_qpos_np = np.pad(gripper_qpos_np, (0, self.state_dim - len(gripper_qpos_np)))
+        
+        # Add noise if enabled
+        if self.noise_scale > 0:
+            noise = np.random.randn(len(gripper_qpos_np)) * self.noise_level * self.noise_scale
+            gripper_qpos_np = gripper_qpos_np + noise
 
         self.quantities["gripper_qpos_meas"] = torch.tensor(gripper_qpos_np, dtype=self.dtype, device=self.device)
         return True
