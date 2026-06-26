@@ -13,7 +13,7 @@ MAX_TIMESTEPS = 1000
 
 
 # reuse your existing functions (copy them from current file)
-from Sweep import (
+from aicon.drawer_tutorial.Sweep import (
     get_default_estimator_params,
     get_default_connection_params,
     setup_env,
@@ -26,7 +26,7 @@ def get_all_jobs():
     base_conn_params = get_default_connection_params()
 
     # same logic as your sweep generator
-    from Sweep import generate_single_parameter_sweeps, filter_single_parameter_sweeps
+    from aicon.drawer_tutorial.Sweep import generate_single_parameter_sweeps, filter_single_parameter_sweeps
 
     jobs_est = list(generate_single_parameter_sweeps(base_params))
 
