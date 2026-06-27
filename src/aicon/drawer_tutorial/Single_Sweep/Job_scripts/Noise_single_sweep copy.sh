@@ -3,7 +3,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=8G
 #SBATCH --time=01:00:00
-#SBATCH --output=logs/%A_%a.out
+#SBATCH --output=logs_n/%A_%a.out
 #SBATCH --array=0-475%200
 
 source $(conda info --base)/etc/profile.d/conda.sh
@@ -23,6 +23,6 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
 # Ensure logs directory exists and run Python, saving a per-job .out file
-mkdir -p logs
-python -u Sweep_hpc.py "$JOB_ID" 1
+mkdir -p logs_n
+python -u Sweep_hpc.py "$JOB_ID" 0 20
 
