@@ -81,3 +81,5 @@ site/
 # OS specific
 .DS_Store
 Thumbs.db
+src/aicon/drawer_tutorial/Gridsearch/results_gridsearch/
+src/aicon/drawer_tutorial/Single_Sweep/results/results_normal
