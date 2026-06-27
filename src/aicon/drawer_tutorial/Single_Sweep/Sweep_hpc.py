@@ -120,6 +120,6 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
 
 if __name__ == "__main__":
     idx = int(sys.argv[1])
-    disturbance = float(sys.argv[2]) if len(sys.argv) > 2 else None
-    noise_scale = float(sys.argv[3]) if len(sys.argv) > 3 else None
+    disturbance = float(sys.argv[2]) if len(sys.argv) > 2 else 0
+    noise_scale = float(sys.argv[3]) if len(sys.argv) > 3 else 0
     main(idx, disturbance=disturbance, noise_scale=noise_scale)

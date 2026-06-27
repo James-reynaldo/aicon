@@ -17,7 +17,7 @@ from aicon.drawer_tutorial.Sweep import (
     run_trial
 )
 
-RENDER = True
+RENDER = False
 NUM_TRIALS_PER_JOB = 3
 MAX_TIMESTEPS = 1000
 
@@ -339,6 +339,6 @@ if __name__ == "__main__":
         sys.exit(0)
 
     idx = int(sys.argv[1])
-    disturbance = float(sys.argv[2]) if len(sys.argv) > 2 else None
-    noise_scale = float(sys.argv[3]) if len(sys.argv) > 3 else None
+    disturbance = float(sys.argv[2]) if len(sys.argv) > 2 else 0
+    noise_scale = float(sys.argv[3]) if len(sys.argv) > 3 else 0
     main(idx, disturbance=disturbance, noise_scale=noise_scale)
