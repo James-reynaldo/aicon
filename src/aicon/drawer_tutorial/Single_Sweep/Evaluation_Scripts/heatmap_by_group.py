@@ -1,5 +1,7 @@
 import argparse
 import csv
+import json
+import sqlite3
 from collections import defaultdict
 from pathlib import Path
 import math
@@ -62,6 +64,74 @@ def read_results(csv_path: Path):
             value = parse_float(row[idx_value]) if idx_value is not None else None
             timesteps = parse_float(row[idx_timesteps]) if idx_timesteps is not None else None
             rows.append({"group": group, "name": name, "label": label, "success": success, "sweep_value": value, "timesteps": timesteps})
+    return rows
+
+
+def _extract_baseline_value(params, group, name):
+    if params is None:
+        return None
+    if group.startswith("connection."):
+        _, connection_group = group.split(".", 1)
+        return params.get("connection_params", {}).get(connection_group, {}).get(name)
+    return params.get(group, {}).get(name)
+
+
+def read_results_from_db(db_path: Path):
+    rows = []
+    baseline_params = None
+    baseline_trials = []
+
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute("SELECT t.metadata, t.success, t.timesteps, c.params FROM trials t JOIN configs c ON t.config_id = c.config_id")
+    for metadata_json, success_val, timesteps, params_json in cur.fetchall():
+        try:
+            metadata = json.loads(metadata_json) if metadata_json else {}
+        except Exception:
+            continue
+
+        parameter = metadata.get("parameter", "")
+        label = metadata.get("label", "")
+        sweep_value = metadata.get("sweep_value")
+
+        if parameter == "standard.standard" and label == "standard":
+            if baseline_params is None:
+                try:
+                    baseline_params = json.loads(params_json)
+                except Exception:
+                    baseline_params = None
+            baseline_trials.append({"success": bool(success_val), "timesteps": timesteps})
+            continue
+
+        if "." in parameter:
+            group, name = parameter.rsplit('.', 1)
+        else:
+            group, name = "", parameter
+
+        if sweep_value is None and label == "standard":
+            sweep_value = metadata.get("standard_value")
+            if sweep_value is None:
+                sweep_value = _extract_baseline_value(baseline_params, group, name)
+
+        rows.append({"group": group, "name": name, "label": label, "success": bool(success_val), "sweep_value": sweep_value, "timesteps": timesteps})
+
+    if baseline_params and baseline_trials:
+        all_groups = {(r["group"], r["name"]) for r in rows if not (r["group"] == "standard" and r["name"] == "standard")}
+        for group, name in all_groups:
+            baseline_value = _extract_baseline_value(baseline_params, group, name)
+            if baseline_value is None:
+                continue
+            for trial in baseline_trials:
+                rows.append({
+                    "group": group,
+                    "name": name,
+                    "label": "standard",
+                    "success": trial["success"],
+                    "sweep_value": baseline_value,
+                    "timesteps": trial["timesteps"],
+                })
+
+    conn.close()
     return rows
 
 
@@ -207,15 +277,19 @@ def plot_group_heatmap(group_key, group_data, out_dir: Path, metric: str = "succ
 def main():
     parser = argparse.ArgumentParser(description="Create heatmaps per param_group (param_name x sweep_label).")
     parser.add_argument('--results-dir', default='results', help='Results CSV folder')
+    parser.add_argument('--db-path', default='', help='SQLite experiment database path to read results from')
     parser.add_argument('--output-dir', default='heatmaps', help='Output folder for heatmaps')
     parser.add_argument('--metric', choices=['success', 'timesteps', 'both'], default='both', help='Which metric to plot')
     parser.add_argument('--no-annotate', action='store_true', help='Do not write text annotations in cells')
     args = parser.parse_args()
 
     rows = []
-    base = Path(args.results_dir)
-    for p in sorted(base.glob('*.csv')):
-        rows.extend(read_results(p))
+    if args.db_path:
+        rows = read_results_from_db(Path(args.db_path))
+    else:
+        base = Path(args.results_dir)
+        for p in sorted(base.glob('*.csv')):
+            rows.extend(read_results(p))
 
     if not rows:
         raise SystemExit('No rows found in results')

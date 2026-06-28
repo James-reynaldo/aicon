@@ -5,6 +5,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import sqlite3
+import json
 
 
 def parse_bool(value):
@@ -59,6 +61,36 @@ def read_results(csv_path: Path):
                 }
             )
         return rows
+
+
+def read_results_from_db(db_path: Path):
+    rows = []
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute("SELECT t.metadata, t.success FROM trials t")
+    for metadata_json, success_val in cur.fetchall():
+        try:
+            metadata = json.loads(metadata_json) if metadata_json else {}
+        except Exception:
+            continue
+
+        parameter = metadata.get("parameter", "")
+        if "." in parameter:
+            group, name = parameter.rsplit('.', 1)
+        else:
+            group, name = "", parameter
+
+        label = metadata.get("label", "")
+        success = bool(success_val)
+        rows.append({
+            "param_group": group,
+            "param_name": name,
+            "sweep_label": label,
+            "success": success,
+        })
+
+    conn.close()
+    return rows
 
 
 def build_summary(rows, sweep_label="negative"):
@@ -171,7 +203,11 @@ def main():
         default="results",
         help="Directory containing CSV result files.",
     )
-
+    parser.add_argument(
+        "--db-path",
+        default="",
+        help="SQLite experiment database path to read results from",
+    )
     parser.add_argument(
         "--sweep-label",
         choices=["negative", "zero", "positive"],
@@ -180,14 +216,16 @@ def main():
     )
     args = parser.parse_args()
 
-    base_dir = Path(args.results_dir)
-    csv_files = sorted(base_dir.glob("*.csv"))
-    if not csv_files:
-        raise SystemExit(f"No CSV files found in {base_dir}")
-
     all_rows = []
-    for csv_path in csv_files:
-        all_rows.extend(read_results(csv_path))
+    if args.db_path:
+        all_rows = read_results_from_db(Path(args.db_path))
+    else:
+        base_dir = Path(args.results_dir)
+        csv_files = sorted(base_dir.glob("*.csv"))
+        if not csv_files:
+            raise SystemExit(f"No CSV files found in {base_dir}")
+        for csv_path in csv_files:
+            all_rows.extend(read_results(csv_path))
 
     summary = build_summary(all_rows, sweep_label=args.sweep_label)
     if not summary:

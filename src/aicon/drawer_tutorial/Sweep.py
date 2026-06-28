@@ -110,7 +110,7 @@ def get_default_estimator_params():
             "negative_innovation_threshold": -0.05,
             "negative_innovation_scale": 0.1,
         },
-        "drawer_position": {
+        "drawer_position": { # 22 params
             # "initial_depth": None,
             "depth_prior": 0.8,# no need
             "initial_uncertainty_scale": 200, # maybe no
@@ -141,8 +141,8 @@ def get_default_estimator_params():
             # "initial_rotation_xy": None,
             # "initial_uncertainty_scale": None,
             # "sample_init_mean": False,
-            # "initial_azimuth_default": -0.7853981633974483,
-            # "initial_elevation_default": -1.5707963267948966,
+            "initial_azimuth_default": -0.7853981633974483,
+            "initial_elevation_default": -1.5707963267948966,
 
             "grasped_noise": 0.002, # When value too high, estimation error quite big
             "ungrasped_noise": 0.001, # Seem to not matter at all
@@ -185,10 +185,20 @@ def get_sweep_values(standard_value):
         ("zero", 0.0),
         ("x0.001", 0.001 * standard_value),
         ("x0.5", 0.5 * standard_value),
-        ("standard", standard_value),
         ("x2", 2.0 * standard_value),
         ("x1000", 1000.0 * standard_value),
     ]
+
+
+def get_standard_job(base_params):
+    return {
+        "group_name": "standard",
+        "param_name": "standard",
+        "standard_value": None,
+        "sweep_label": "standard",
+        "sweep_value": None,
+        "trial_params": copy.deepcopy(base_params),
+    }
 
 
 def generate_single_parameter_sweeps(base_params):
@@ -219,6 +229,7 @@ def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_lab
         env.reset()
 
     # support optional connection-level overrides in estimator params dict under key "connection_params"
+    estimator_params = copy.deepcopy(estimator_params) if isinstance(estimator_params, dict) else estimator_params
     connection_params = estimator_params.pop("connection_params", None) if isinstance(estimator_params, dict) else None
 
     component_building_functions, _, _ = get_building_functions_basic_drawer_motion(

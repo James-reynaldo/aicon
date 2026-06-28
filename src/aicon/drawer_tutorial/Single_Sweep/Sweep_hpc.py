@@ -1,11 +1,17 @@
 import sys
 import copy
 import numpy as np
+from pathlib import Path
 
+from aicon.drawer_tutorial.Experiment_store import ExperimentStore
 from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
 from aicon.middleware.python_sequential import build_components, run_component_sequence
 
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+DATA_DIR_DISTURBANCE = DATA_DIR / "disturbance"
+DATA_DIR_NOISE = DATA_DIR / "noise"
+DATA_DIR_NORMAL = DATA_DIR / "normal"
 NUM_TRIALS_PER_JOB = 3
 BOUNDARY_EXTENDED_TRIALS = 7
 RANDOM_INIT_TIME = 0.5  # seconds of random movement at start
@@ -17,6 +23,7 @@ MAX_TIMESTEPS = 1000
 from aicon.drawer_tutorial.Sweep import (
     get_default_estimator_params,
     get_default_connection_params,
+    get_standard_job,
     setup_env,
     run_trial,
     set_global_seed,
@@ -30,6 +37,8 @@ def get_all_jobs():
     from aicon.drawer_tutorial.Sweep import generate_single_parameter_sweeps, filter_single_parameter_sweeps
 
     jobs_est = list(generate_single_parameter_sweeps(base_params))
+    for job in jobs_est:
+        job["trial_params"]["connection_params"] = copy.deepcopy(base_conn_params)
 
     jobs_conn = list(generate_single_parameter_sweeps(base_conn_params))
     for job in jobs_conn:
@@ -39,12 +48,15 @@ def get_all_jobs():
         trial_est_params["connection_params"] = conn_trial
         job["trial_params"] = trial_est_params
 
-    return jobs_est + jobs_conn
+    standard_job = get_standard_job(base_params)
+    standard_job["trial_params"]["connection_params"] = copy.deepcopy(base_conn_params)
+
+    return [standard_job] + jobs_est + jobs_conn
 
 
 def main(job_index: int, disturbance: float = None, noise_scale: float = None):
     jobs = get_all_jobs()
-    # print(total_jobs := len(jobs), "total jobs")
+    print(total_jobs := len(jobs), "total jobs")
     if job_index < 0 or job_index >= len(jobs):
         raise ValueError(f"Invalid job index {job_index}")
 
@@ -57,6 +69,24 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
     env = setup_env(render=RENDER, initial_qpos=initial_panda_qpos)
 
     results = []
+
+    if disturbance != 0:
+        directory = DATA_DIR_DISTURBANCE
+    elif noise_scale != 0:
+        directory = DATA_DIR_NOISE
+    else:
+        directory = DATA_DIR_NORMAL
+    directory.mkdir(exist_ok=True, parents=True)
+    db_path = directory / "experiment_store.db"
+    store = ExperimentStore(str(db_path))
+
+    job_metadata = {
+        "experiment_type": "1d_sweep",
+        "parameter": f"{job['group_name']}.{job['param_name']}",
+        "label": job["sweep_label"],
+        "sweep_value": job["sweep_value"],
+    }
+    job_metadata.update(job.get("metadata", {}))
 
     try:
         for run in range(NUM_TRIALS_PER_JOB):
@@ -74,6 +104,15 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
                 random_std=1,
                 disturbance=disturbance,
                 noise_scale=noise_scale
+            )
+
+            store.add_trial(
+                params=job["trial_params"],
+                success=success,
+                seed=run,
+                timesteps=timesteps,
+                error=err,
+                metadata=job_metadata,
             )
 
             results.append((
@@ -111,6 +150,15 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
                     noise_scale=noise_scale
                 )
 
+                store.add_trial(
+                    params=job["trial_params"],
+                    success=success,
+                    seed=run,
+                    timesteps=timesteps,
+                    error=err,
+                    metadata=job_metadata,
+                )
+
                 results.append((
                     job["group_name"],
                     job["param_name"],
@@ -126,31 +174,9 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
             env.close()
         except Exception:
             pass
+        store.close()
 
-    # save per-job result
-    import csv
-    from pathlib import Path
-    
-    if disturbance is not None:
-        out_file = Path("results_disturbance") / f"j_{job_index}_d_{disturbance}.csv"
-    elif noise_scale is not None:
-        out_file = Path("results_noise") / f"j_{job_index}_n_{noise_scale}.csv"
-    else:
-        out_file = Path("results") / f"j_{job_index}.csv"
-    out_file.parent.mkdir(exist_ok=True)
-
-    with open(out_file, "w") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "param_group",
-            "param_name",
-            "sweep_label",
-            "sweep_value",
-            "success",
-            "timesteps",
-            "error",
-        ])
-        writer.writerows(results)
+    print(f"Experiment database saved to: {db_path}")
 
 
 if __name__ == "__main__":
