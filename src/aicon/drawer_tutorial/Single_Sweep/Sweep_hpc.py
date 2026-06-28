@@ -7,6 +7,7 @@ from aicon.drawer_tutorial.experiment_specifications import get_building_functio
 from aicon.middleware.python_sequential import build_components, run_component_sequence
 
 NUM_TRIALS_PER_JOB = 3
+BOUNDARY_EXTENDED_TRIALS = 7
 RANDOM_INIT_TIME = 0.5  # seconds of random movement at start
 RENDER = False
 MAX_TIMESTEPS = 1000
@@ -86,6 +87,40 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
             ))
 
             print(f"run {run}: success={success}, steps={timesteps}, err={err}")
+
+        initial_successes = sum(1 for result in results if result[4])
+        if initial_successes in {1, 2}:
+            print(
+                f"Boundary success rate detected ({initial_successes}/{NUM_TRIALS_PER_JOB}), "
+                f"running {BOUNDARY_EXTENDED_TRIALS} more trials to total 10 runs."
+            )
+            for run in range(NUM_TRIALS_PER_JOB, NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS):
+                set_global_seed(run)
+                success, timesteps, err, grasp, grasped = run_trial(
+                    env,
+                    estimator_params=job["trial_params"],
+                    max_timesteps=MAX_TIMESTEPS,
+                    render=RENDER,
+                    sweep_label=job["sweep_label"],
+                    group_name=job["group_name"],
+                    param_name=job["param_name"],
+                    sweep_value=job["sweep_value"],
+                    random_init_time=RANDOM_INIT_TIME,
+                    random_std=1,
+                    disturbance=disturbance,
+                    noise_scale=noise_scale
+                )
+
+                results.append((
+                    job["group_name"],
+                    job["param_name"],
+                    job["sweep_label"],
+                    job["sweep_value"],
+                    success,
+                    timesteps,
+                    err,
+                ))
+                print(f"run {run}: success={success}, steps={timesteps}, err={err}")
     finally:
         try:
             env.close()

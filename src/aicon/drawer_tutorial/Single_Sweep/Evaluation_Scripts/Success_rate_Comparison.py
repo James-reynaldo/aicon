@@ -119,18 +119,15 @@ def plot_combined_summary(summary, output_dir: Path, sweep_label="negative"):
     """Create a combined plot showing all parameter groups together."""
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Collect all data with param_group labels
+    # Collect all data with param_group labels, preserving group blocks.
     all_data = []
     colors_map = {}
     color_palette = plt.cm.Set3(np.linspace(0, 1, len(summary)))
     
     for idx, (param_group, param_data) in enumerate(summary.items()):
         colors_map[param_group] = color_palette[idx]
-        for param_name, success_rate in param_data:
+        for param_name, success_rate in sorted(param_data, key=lambda x: x[1]):
             all_data.append((param_name, success_rate, param_group))
-    
-    # Sort by success rate
-    all_data.sort(key=lambda x: x[1])
     
     param_names = [item[0] for item in all_data]
     success_rates = [item[1] for item in all_data]
