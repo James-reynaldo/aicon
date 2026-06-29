@@ -1,10 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=AICON_Single_Param_Sweep
-#SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=8G
+#SBATCH --cpus-per-task=2
+#SBATCH --partition=c1b,c2
+#SBATCH --mem-per-cpu=6G
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/%A_%a.out
-#SBATCH --array=0-475%200
+#SBATCH --array=0-420%200
 
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate domip2

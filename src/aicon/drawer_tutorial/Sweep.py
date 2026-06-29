@@ -86,15 +86,10 @@ def get_default_estimator_params():
             "initial_clip_max": 0.98,
 
             "update_gain": 0.5,
-            # "clip_min": 1e-9,
-            # "clip_max": 0.9999999,
         },
         "grasp_likelihood": {
             "initial_likelihood": 0.01, # Seem to not matter at all
-            # "initially_grasped": False,
             "initially_grasped_likelihood": 0.99,
-            # "clip_min": 1e-10,
-            # "clip_max": 0.9999999,
             "baseline_measurement_likelihood": 0.05,
             "initial_clip_min": 0.02,
             "initial_clip_max": 0.98,
@@ -111,14 +106,12 @@ def get_default_estimator_params():
             "negative_innovation_scale": 0.1,
         },
         "drawer_position": { # 22 params
-            # "initial_depth": None,
             "depth_prior": 0.8,# no need
             "initial_uncertainty_scale": 200, # maybe no
             "initial_uncertainty_xy": 0.2, # maybe no
             "initial_uncertainty_depth": 1.0, # maybe no
             "initial_uncertainty_xy_none": 0.1, # no need
             "initial_uncertainty_depth_none": 0.3,# no need
-            # "sample_init_mean": False,
             "sample_init_mean_likelihood_threshold": 0.6, # no need
             "sample_init_mean_distance_threshold": 0.25, # no need
             "sample_init_mean_uncertainty_multiplier": 2.0, # no need
@@ -138,9 +131,6 @@ def get_default_estimator_params():
             "tf_lookup_timeout": 5.0, # no need
         },
         "kinematic_joint": {
-            # "initial_rotation_xy": None,
-            # "initial_uncertainty_scale": None,
-            # "sample_init_mean": False,
             "initial_azimuth_default": -0.7853981633974483,
             "initial_elevation_default": -1.5707963267948966,
 

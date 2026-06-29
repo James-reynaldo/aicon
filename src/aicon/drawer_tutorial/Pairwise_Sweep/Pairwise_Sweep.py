@@ -5,127 +5,70 @@ import os
 import json
 import hashlib
 from datetime import datetime
+from pathlib import Path
 import csv
 import numpy as np
 
 from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
 from aicon.middleware.python_sequential import build_components, run_component_sequence
+from aicon.drawer_tutorial.Experiment_store import ExperimentStore
 
 from aicon.drawer_tutorial.Sweep import (
     setup_env,
-    run_trial
+    run_trial,
+    get_default_estimator_params as sweep_get_default_estimator_params,
+    get_default_connection_params as sweep_get_default_connection_params,
 )
 
 RENDER = False
 NUM_TRIALS_PER_JOB = 3
 MAX_TIMESTEPS = 1000
 
+# ============================================================================
+# CONFIGURATION: Choose which parameter groups to include in pairwise sweep
+# ============================================================================
+# 
+# Set SWEEP_ESTIMATOR_GROUPS and SWEEP_CONNECTION_GROUPS to control which
+# parameters are included in the pairwise sweep. Non-swept parameters will
+# still be included in trial configs with their standard values.
+#
+# AVAILABLE ESTIMATOR GROUPS:
+#   - "ee_pose": end-effector pose estimation parameters (3 params)
+#   - "visible": visibility estimation parameters (2 params)
+#   - "grasp_likelihood": grasp likelihood parameters (11 params)
+#   - "drawer_position": drawer position estimation parameters (12 params)
+#   - "kinematic_joint": kinematic joint estimation parameters (9 params)
+#
+# AVAILABLE CONNECTION GROUPS:
+#   - "DistGraspHandConnection": connection/grasping parameters (12 params)
+#
+# EXAMPLES:
+#   # Sweep only drawer_position parameters in pairwise combinations:
+#   SWEEP_ESTIMATOR_GROUPS = ["drawer_position"]
+#   SWEEP_CONNECTION_GROUPS = []
+#
+#   # Sweep both drawer_position and grasp_likelihood:
+#   SWEEP_ESTIMATOR_GROUPS = ["drawer_position", "grasp_likelihood"]
+#   SWEEP_CONNECTION_GROUPS = []
+#
+#   # Include all available groups:
+#   SWEEP_ESTIMATOR_GROUPS = ["ee_pose", "visible", "grasp_likelihood", "drawer_position", "kinematic_joint"]
+#   SWEEP_CONNECTION_GROUPS = ["DistGraspHandConnection"]
+#
+# ============================================================================
+
+SWEEP_ESTIMATOR_GROUPS = ["drawer_position"]  # Only drawer_position for now
+SWEEP_CONNECTION_GROUPS = ["DistGraspHandConnection"]  # Include connection parameters
+
 def get_default_estimator_params():
-    return {
-        # "ee_pose": {
-        #     "initial_uncertainty_scale": 0.001, # Seem to not matter at all
-        #     "action_process_noise": 0.01, # Seem to not matter so much, just not negative (fail)
-        #     "proprio_update_noise": 0.01, # Seem to not matter so much, just not negative (fail)
-        # },
-        # "visible": {
-        #     "initial_likelihood_prior": 0.01,
-        #     "initial_clip_min": 0.02,
-        #     "initial_clip_max": 0.98,
+    """Import complete estimator params from Sweep.py to ensure all parameters are included."""
+    return sweep_get_default_estimator_params()
 
-        #     "update_gain": 0.5,
-        #     # "clip_min": 1e-9,
-        #     # "clip_max": 0.9999999,
-        # },
-        # "grasp_likelihood": {
-        #     "initial_likelihood": 0.01, # Seem to not matter at all
-        #     # "initially_grasped": False,
-        #     "initially_grasped_likelihood": 0.99,
-        #     # "clip_min": 1e-10,
-        #     # "clip_max": 0.9999999,
-        #     "baseline_measurement_likelihood": 0.05,
-        #     "initial_clip_min": 0.02,
-        #     "initial_clip_max": 0.98,
-        #     "initial_time_since_hand_change": 2.0,
-
-        #     "gripper_activation_threshold": 0.5,
-        #     "close_distance_threshold": 0.03,
-        #     "uncertainty_dist_threshold": 0.25,
-        #     "hand_change_time_threshold": 1.0,
-        #     "force_time_scale": 6.0,
-        #     "force_time_max": 6.0,
-        #     "low_likelihood_threshold": 0.1,
-        #     "negative_innovation_threshold": -0.05,
-        #     "negative_innovation_scale": 0.1,
-        # },
-        "drawer_position": {
-            # "initial_depth": None,
-            # "depth_prior": 0.8,# no need
-            # "initial_uncertainty_scale": 200, # maybe no
-            # "initial_uncertainty_xy": 0.2, # maybe no
-            # "initial_uncertainty_depth": 1.0, # maybe no
-            # "initial_uncertainty_xy_none": 0.1, # no need
-            # "initial_uncertainty_depth_none": 0.3,# no need
-            # # "sample_init_mean": False,
-            # "sample_init_mean_likelihood_threshold": 0.6, # no need
-            # "sample_init_mean_distance_threshold": 0.25, # no need
-            # "sample_init_mean_uncertainty_multiplier": 2.0, # no need
-
-            "meas_noise_factor": 0.025,
-            "visual_likelihood_steepness": 5.0,
-            "R_add_scale": 5.0,
-            # "measurement_nan_reject_scale": 0.01, # no need
-            # "forward_noise_grasped_coeff": 0.15, 
-            # "forward_noise_base": 0.005, 
-            # "grasped_update_R_scale": 0.03, 
-            # "grasped_outlier_rejection_threshold": 0.05, 
-            # "measurement_existence_threshold": 0.5,
-            # "grasped_uncertainty_threshold": 0.1,
-            # "missed_absent_measurement_uncertainty_coeff": 0.1, 
-            # "hand_change_recovery_time": 0.5, # no need
-            # "tf_lookup_timeout": 5.0, # no need
-        },
-        # "kinematic_joint": {
-            # "initial_rotation_xy": None,
-            # "initial_uncertainty_scale": None,
-            # "sample_init_mean": False,
-            # "initial_azimuth_default": -0.7853981633974483,
-            # "initial_elevation_default": -1.5707963267948966,
-
-            # "grasped_noise": 0.002, # When value too high, estimation error quite big
-            # "ungrasped_noise": 0.001, # Seem to not matter at all
-            # "axis_azimuth_process_noise": 0.001, # Does not seem to matter
-            # "axis_elevation_process_noise": 0.001, # Does not seem to matter
-            # "joint_process_noise": 0.2, # When negative, take a long time and high estimation error, when zero, high estimation error
-            # "anchor_process_noise": 1e-6, # Does not seem to matter
-            # "grasp_threshold": 0.2, # Does not matter much, just not zero
-            # "grasp_floor": 0.2, # When value too high, estimation error quite big
-            # "outlier_rejection_treshold": 4.0,
-            # "shift_clip_min": 1e-10,
-        # },
-    }
 
 def get_default_connection_params():
-    # Defaults mirror the hard-coded values in DistGraspHandConnection
-    return {
-        # "DistGraspHandConnection": {
-        #     "dist_decay": 4.0,
-        #     "close_dist_threshold": 0.03,
-        #     "ft_noise_offset": 5.0,
-        #     "low_likelihood_threshold": 0.1,
-        #     "gripper_activation_threshold": 0.5,
-        #     "uncertainty_dist_threshold": 0.25,
-        #     "small_likelihood_value": 1e-8,
-
-        #     "uncertainty_bias": 0.2,
-        #     "uncertainty_scale_uncertainty": 5.0,
-        #     "uncertainty_scale_relevance": 20.0,
-        #     "dist_sigmoid_scale": 5.0,
-        #     "time_since_hand_change_threshold": 1.0,
-        #     "ft_tresh_multiplier": 6.0,
-        #     "ft_tresh_cap": 6.0,
-        # }
-    }
+    """Import complete connection params from Sweep.py to ensure all parameters are included."""
+    return sweep_get_default_connection_params()
 
 
 def get_all_jobs():
@@ -134,8 +77,12 @@ def get_all_jobs():
 
     sweep_specs = []
 
-    def _collect_specs(params, prefix=None, connection=False):
+    def _collect_specs(params, prefix=None, connection=False, group_filter=None):
+        """Collect sweep specs from params, optionally filtering by group names."""
         for group_name in sorted(params.keys()):
+            # Skip groups not in the filter list
+            if group_filter is not None and group_name not in group_filter:
+                continue
             for param_name in sorted(params[group_name].keys()):
                 standard_value = params[group_name][param_name]
                 sweep_values = list(get_sweep_values(standard_value, param_name=param_name))
@@ -149,8 +96,11 @@ def get_all_jobs():
                     }
                 )
 
-    _collect_specs(base_params, connection=False)
-    _collect_specs(base_conn_params, connection=True)
+    # Collect estimator parameter specs (filtered by SWEEP_ESTIMATOR_GROUPS)
+    _collect_specs(base_params, connection=False, group_filter=SWEEP_ESTIMATOR_GROUPS)
+    
+    # Collect connection parameter specs (filtered by SWEEP_CONNECTION_GROUPS)
+    _collect_specs(base_conn_params, connection=True, group_filter=SWEEP_CONNECTION_GROUPS)
 
     if not sweep_specs:
         return []
@@ -163,6 +113,10 @@ def get_all_jobs():
 
     for specs in spec_combinations:
         for combination in itertools.product(*(spec["sweep_values"] for spec in specs)):
+            # Skip the pairwise combination where every swept parameter is at its standard value
+            if all(sweep_label == "standard" for sweep_label, _ in combination):
+                continue
+
             trial_params = copy.deepcopy(base_params)
             connection_params = {}
             job_groups = []
@@ -220,8 +174,10 @@ def make_compact_id(job: dict) -> str:
     return f"{ts}-{h}"
 
 
-def save_job_metadata(job: dict, results: list, out_dir: str = "results_pairwise", job_index: int = None) -> tuple:
+def save_job_metadata(job: dict, results: list, out_dir: str = "results_pairwise", job_index: int = None, store: ExperimentStore = None) -> tuple:
     """Save metadata JSON and per-run CSV for a completed job. Returns (json_path, csv_path).
+    
+    Also stores complete trial data in database if store is provided.
 
     If `job_index` is provided, use it (as decimal) for filenames; otherwise fall back to compact hash id.
     """
@@ -266,6 +222,25 @@ def save_job_metadata(job: dict, results: list, out_dir: str = "results_pairwise
         for rec in results:
             writer.writerow(rec)
 
+    # Store each trial in the database with complete parameter set
+    if store is not None:
+        for rec in results:
+            group_name, param_name, sweep_label, sweep_value, success, timesteps, err = rec
+            job_metadata = {
+                "experiment_type": "pairwise_sweep",
+                "parameters": ",".join(job.get("param_name", "").split(",")),
+                "sweep_labels": sweep_label,
+                "sweep_values": str(sweep_value),
+            }
+            store.add_trial(
+                params=job.get("trial_params"),
+                success=success,
+                seed=None,  # seed not applicable for pairwise sweeps
+                timesteps=timesteps,
+                error=err,
+                metadata=job_metadata,
+            )
+
     return json_path, csv_path
 
 def main(job_index:int, disturbance:float=None, noise_scale:float=None):
@@ -287,6 +262,12 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
     env = setup_env(render=RENDER, initial_qpos=initial_panda_qpos)
 
     print("trial params:", job["trial_params"])
+
+    # Initialize database for storing complete trial configs
+    results_dir = Path("results_pairwise")
+    results_dir.mkdir(exist_ok=True, parents=True)
+    db_path = results_dir / "pairwise_sweep_store.db"
+    store = ExperimentStore(str(db_path))
 
     results = []
 
@@ -324,13 +305,19 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
         except Exception as e:
             print(f"Error closing environment: {e}")
 
-    # save results and metadata
+    # save results and metadata (including to database)
     try:
-        json_path, csv_path = save_job_metadata(job, results, out_dir="results_pairwise", job_index=job_index)
+        json_path, csv_path = save_job_metadata(job, results, out_dir="results_pairwise", job_index=job_index, store=store)
         print(f"Saved results: {csv_path}")
         print(f"Saved metadata: {json_path}")
+        print(f"Saved to database: {db_path}")
     except Exception as e:
         print(f"Error saving metadata/results: {e}")
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
     
 
 if __name__ == "__main__":
