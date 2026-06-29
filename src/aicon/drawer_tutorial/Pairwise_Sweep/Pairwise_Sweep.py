@@ -156,8 +156,18 @@ def get_all_jobs():
 
     for specs in spec_combinations:
         for combination in itertools.product(*(spec["sweep_values"] for spec in specs)):
+            sweep_labels = tuple(sweep_label for sweep_label, _ in combination)
+
             # Skip the pairwise combination where every swept parameter is at its standard value
-            if all(sweep_label == "standard" for sweep_label, _ in combination):
+            if all(sweep_label == "standard" for sweep_label in sweep_labels):
+                continue
+
+            if sweep_labels in {
+                ("x0.5", "standard"),
+                ("x2", "standard"),
+                ("standard", "x0.5"),
+                ("standard", "x2"),
+            }:
                 continue
 
             trial_params = copy.deepcopy(base_params)
@@ -182,7 +192,7 @@ def get_all_jobs():
                     "group_name": ",".join(job_groups),
                     "param_name": ",".join(spec["param_name"] for spec in specs),
                     "standard_value": None,
-                    "sweep_label": ",".join(label for label, _ in combination),
+                    "sweep_label": ",".join(sweep_labels),
                     "sweep_value": None,
                     "trial_params": trial_params,
                     "job_name": "|".join(job_names),
