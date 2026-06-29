@@ -68,7 +68,32 @@ DATA_DIR_NORMAL = DATA_DIR / "normal"
 #
 # ============================================================================
 
-SWEEP_ESTIMATOR_GROUPS = {"drawer_position": ["meas_noise_factor", "R_add_scale"]}
+# SWEEP_ESTIMATOR_GROUPS = {"drawer_position": ["meas_noise_factor", "R_add_scale"]}
+SWEEP_ESTIMATOR_GROUPS = {"drawer_position": [
+    "depth_prior",
+    "initial_uncertainty_scale",
+    "initial_uncertainty_xy",
+    "initial_uncertainty_depth",
+    "initial_uncertainty_xy_none",
+    "initial_uncertainty_depth_none",
+    "sample_init_mean_likelihood_threshold",
+    "sample_init_mean_distance_threshold",
+    "sample_init_mean_uncertainty_multiplier",
+
+    "meas_noise_factor",
+    "visual_likelihood_steepness",
+    "R_add_scale",
+    "measurement_nan_reject_scale",
+    "forward_noise_grasped_coeff", 
+    "forward_noise_base", 
+    "grasped_update_R_scale", 
+    "grasped_outlier_rejection_threshold", 
+    "measurement_existence_threshold", 
+    "grasped_uncertainty_threshold", 
+    "missed_absent_measurement_uncertainty_coeff",
+    "hand_change_recovery_time",
+    "tf_lookup_timeout",
+]}
 SWEEP_CONNECTION_GROUPS = {}  # Include connection parameters
 # SWEEP_CONNECTION_GROUPS = {"DistGraspHandConnection": ["ft_noise_offset"]}  # Include connection parameters
 
@@ -188,29 +213,6 @@ def make_compact_id(job: dict) -> str:
     h = hashlib.sha1(name.encode("utf-8")).hexdigest()[:6]
     return f"{ts}-{h}"
 
-
-def save_job_metadata(job: dict, results: list, store: ExperimentStore = None) -> None:
-    """Store completed pairwise job trials in the database.
-
-    This function no longer writes CSV or JSON output for pairwise sweep jobs.
-    """
-    if store is not None:
-        for rec in results:
-            group_name, param_name, sweep_label, sweep_value, success, timesteps, err = rec
-            job_metadata = {
-                "experiment_type": "pairwise_sweep",
-                "parameters": ",".join(job.get("param_name", "").split(",")),
-                "sweep_labels": sweep_label,
-                "sweep_values": str(sweep_value),
-            }
-            store.add_trial(
-                params=job.get("trial_params"),
-                success=success,
-                seed=run,
-                timesteps=timesteps,
-                error=err,
-                metadata=job_metadata,
-            )
 
 def main(job_index:int, disturbance:float=None, noise_scale:float=None):
     jobs = get_all_jobs()

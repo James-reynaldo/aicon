@@ -95,7 +95,10 @@ def read_results_from_db(db_path: Path):
 
 def build_summary(rows, sweep_label="negative"):
     # Filter rows based on sweep_label
-    if sweep_label == "positive":
+    if sweep_label == "all":
+        # Include negative, zero, and positive sweeps together.
+        filtered_rows = rows
+    elif sweep_label == "positive":
         # For positive, include all rows that are not "negative" or "zero"
         filtered_rows = [row for row in rows if row.get("sweep_label") not in ("negative", "zero")]
     else:
@@ -120,25 +123,84 @@ def build_summary(rows, sweep_label="negative"):
     return summary
 
 
-def plot_summary(summary, output_dir: Path, sweep_label="negative"):
+def plot_summary(summary_normal, summary_noise, summary_disturbance, output_dir: Path, sweep_label="negative"):
     output_dir.mkdir(parents=True, exist_ok=True)
-    for param_group, param_data in summary.items():
-        if len(param_data) == 0:
+
+    if summary_normal is None:
+        return
+
+    for param_group, normal_data in summary_normal.items():
+        if len(normal_data) == 0:
             continue
 
-        param_names = [item[0] for item in param_data]
-        success_rates = [item[1] for item in param_data]
-
+        # X-axis comes from the normal summary
+        param_names = [item[0] for item in normal_data]
+        normal_rates = [item[1] for item in normal_data]
         x = list(range(len(param_names)))
 
+        # Map parameter name -> x index
+        x_map = {name: i for i, name in enumerate(param_names)}
+
         plt.figure(figsize=(12, 6))
-        plt.plot(x, success_rates, marker="o", linestyle="-", color="steelblue", linewidth=2)
+
+        # Plot normal
+        plt.plot(
+            x,
+            normal_rates,
+            marker="o",
+            linestyle="None",
+            color="steelblue",
+            linewidth=2,
+            label="Normal",
+        )
+
+        # Plot noise on same x-axis
+        if summary_noise is not None and param_group in summary_noise:
+            noise_x = []
+            noise_y = []
+
+            for name, rate in summary_noise[param_group]:
+                if name in x_map:
+                    noise_x.append(x_map[name])
+                    noise_y.append(rate)
+
+            plt.plot(
+                noise_x,
+                noise_y,
+                marker="x",
+                linestyle="None",
+                color="orange",
+                linewidth=2,
+                label="Noise",
+            )
+
+        # Plot disturbance on same x-axis
+        if summary_disturbance is not None and param_group in summary_disturbance:
+            disturbance_x = []
+            disturbance_y = []
+
+            for name, rate in summary_disturbance[param_group]:
+                if name in x_map:
+                    disturbance_x.append(x_map[name])
+                    disturbance_y.append(rate)
+
+            plt.plot(
+                disturbance_x,
+                disturbance_y,
+                marker="s",
+                linestyle="None",
+                color="green",
+                linewidth=2,
+                label="Disturbance",
+            )
+
         plt.title(f"Success Rate by Parameter ({sweep_label.capitalize()} Sweep) - {param_group}")
         plt.xlabel("Parameter Name")
         plt.ylabel("Success Rate")
         plt.grid(True, linestyle="--", alpha=0.5, axis="y")
         plt.ylim(0, 1.05)
         plt.xticks(x, param_names, rotation=45, ha="right")
+        plt.legend()
         plt.tight_layout()
 
         safe_name = param_group.replace("/", "_").replace(" ", "_")
@@ -147,19 +209,25 @@ def plot_summary(summary, output_dir: Path, sweep_label="negative"):
         plt.close()
 
 
-def plot_combined_summary(summary, output_dir: Path, sweep_label="negative"):
+def plot_combined_summary(summary_normal, summary_noise, summary_disturbance, output_dir: Path, sweep_label="negative"):
     """Create a combined plot showing all parameter groups together."""
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if summary_normal is None:
+        return
     
     # Collect all data with param_group labels, preserving group blocks.
     all_data = []
     colors_map = {}
-    color_palette = plt.cm.Set3(np.linspace(0, 1, len(summary)))
+    color_palette = plt.cm.Set3(np.linspace(0, 1, len(summary_normal)))
     
-    for idx, (param_group, param_data) in enumerate(summary.items()):
+    for idx, (param_group, param_data) in enumerate(summary_normal.items()):
         colors_map[param_group] = color_palette[idx]
         for param_name, success_rate in sorted(param_data, key=lambda x: x[1]):
             all_data.append((param_name, success_rate, param_group))
+
+    if len(all_data) == 0:
+        return
     
     param_names = [item[0] for item in all_data]
     success_rates = [item[1] for item in all_data]
@@ -167,9 +235,59 @@ def plot_combined_summary(summary, output_dir: Path, sweep_label="negative"):
     colors = [colors_map[pg] for pg in param_groups]
     
     x = list(range(len(param_names)))
+    x_map = {(param_group, param_name): i for i, (param_name, _, param_group) in enumerate(all_data)}
     
     plt.figure(figsize=(16, 8))
-    plt.plot(x, success_rates, marker="o", linestyle="-", linewidth=2, color="steelblue")
+    plt.plot(
+        x,
+        success_rates,
+        marker="o",
+        linestyle="None",
+        linewidth=2,
+        color="steelblue",
+        label="Normal",
+    )
+
+    if summary_noise is not None:
+        noise_x = []
+        noise_y = []
+        for param_group, param_data in summary_noise.items():
+            for param_name, success_rate in param_data:
+                key = (param_group, param_name)
+                if key in x_map:
+                    noise_x.append(x_map[key])
+                    noise_y.append(success_rate)
+
+        plt.plot(
+            noise_x,
+            noise_y,
+            marker="x",
+            linestyle="None",
+            linewidth=2,
+            color="orange",
+            label="Noise",
+        )
+
+    if summary_disturbance is not None:
+        disturbance_x = []
+        disturbance_y = []
+        for param_group, param_data in summary_disturbance.items():
+            for param_name, success_rate in param_data:
+                key = (param_group, param_name)
+                if key in x_map:
+                    disturbance_x.append(x_map[key])
+                    disturbance_y.append(success_rate)
+
+        plt.plot(
+            disturbance_x,
+            disturbance_y,
+            marker="s",
+            linestyle="None",
+            linewidth=2,
+            color="green",
+            label="Disturbance",
+        )
+
     plt.title(f"Success Rate by All Parameters ({sweep_label.capitalize()} Sweep) - Combined")
     plt.xlabel("Parameter Name")
     plt.ylabel("Success Rate")
@@ -186,9 +304,17 @@ def plot_combined_summary(summary, output_dir: Path, sweep_label="negative"):
     ax.set_xticklabels([""] * len(param_names))
     
     # Add legend for param groups
+    from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
-    legend_elements = [Patch(facecolor=colors_map[pg], label=pg) for pg in summary.keys()]
-    plt.legend(handles=legend_elements, loc="upper left")
+    dataset_legend = [
+        Line2D([0], [0], marker="o", color="steelblue", linestyle="None", label="Normal"),
+        Line2D([0], [0], marker="x", color="orange", linestyle="None", label="Noise"),
+        Line2D([0], [0], marker="s", color="green", linestyle="None", label="Disturbance"),
+    ]
+    group_legend = [Patch(facecolor=colors_map[pg], label=pg) for pg in summary_normal.keys()]
+    dataset_legend_artist = ax.legend(handles=dataset_legend, loc="upper left")
+    ax.add_artist(dataset_legend_artist)
+    ax.legend(handles=group_legend, loc="upper right", title="Parameter Groups")
     
     plt.tight_layout()
     output_file = output_dir / f"success_rate_{sweep_label}_combined.png"
@@ -204,43 +330,63 @@ def main():
         help="Directory containing CSV result files.",
     )
     parser.add_argument(
-        "--db-path",
+        "--db-path-normal",
+        default="",
+        help="SQLite experiment database path to read results from",
+    )
+    parser.add_argument(
+        "--db-path-noise",
+        default="",
+        help="SQLite experiment database path to read results from",
+    )
+    parser.add_argument(
+        "--db-path-disturbance",
         default="",
         help="SQLite experiment database path to read results from",
     )
     parser.add_argument(
         "--sweep-label",
-        choices=["negative", "zero", "positive"],
+        choices=["negative", "zero", "positive", "all"],
         default="negative",
-        help="Which sweep values to analyze: negative, zero, or positive.",
+        help="Which sweep values to analyze: negative, zero, positive, or all.",
     )
     args = parser.parse_args()
 
-    all_rows = []
-    if args.db_path:
-        all_rows = read_results_from_db(Path(args.db_path))
-    else:
-        base_dir = Path(args.results_dir)
-        csv_files = sorted(base_dir.glob("*.csv"))
-        if not csv_files:
-            raise SystemExit(f"No CSV files found in {base_dir}")
-        for csv_path in csv_files:
-            all_rows.extend(read_results(csv_path))
+    all_rows_normal = []
+    if args.db_path_normal:
+        all_rows_normal = read_results_from_db(Path(args.db_path_normal))
+    all_rows_noise = []
+    if args.db_path_noise:
+        all_rows_noise = read_results_from_db(Path(args.db_path_noise))
+    all_rows_disturbance = []
+    if args.db_path_disturbance:
+        all_rows_disturbance = read_results_from_db(Path(args.db_path_disturbance))
+    # else:
+    #     base_dir = Path(args.results_dir)
+    #     csv_files = sorted(base_dir.glob("*.csv"))
+    #     if not csv_files:
+    #         raise SystemExit(f"No CSV files found in {base_dir}")
+    #     for csv_path in csv_files:
+    #         all_rows.extend(read_results(csv_path))
 
-    summary = build_summary(all_rows, sweep_label=args.sweep_label)
-    if not summary:
+    summary_normal = build_summary(all_rows_normal, sweep_label=args.sweep_label)
+    summary_noise = build_summary(all_rows_noise, sweep_label=args.sweep_label)
+    summary_disturbance = build_summary(all_rows_disturbance, sweep_label=args.sweep_label)
+    if not summary_normal:
         raise SystemExit("No valid rows found to plot.")
 
     if args.sweep_label == "positive":
         out_dir = Path.cwd() / "Success_rate_comparison_plots_positive"
     elif args.sweep_label == "zero":
         out_dir = Path.cwd() / "Success_rate_comparison_plots_zero"
+    elif args.sweep_label == "all":
+        out_dir = Path.cwd() / "Success_rate_comparison_plots_all"
     else:
         out_dir = Path.cwd() / "Success_rate_comparison_plots_negative"
 
-    plot_summary(summary, out_dir, sweep_label=args.sweep_label)
-    plot_combined_summary(summary, out_dir, sweep_label=args.sweep_label)
-    print(f"Saved plots for {len(summary)} parameter groups ({args.sweep_label}) to {out_dir}")
+    plot_summary(summary_normal, summary_noise, summary_disturbance, out_dir, sweep_label=args.sweep_label)
+    plot_combined_summary(summary_normal, summary_noise, summary_disturbance, out_dir, sweep_label=args.sweep_label)
+    print(f"Saved plots for {len(summary_normal)} parameter groups ({args.sweep_label}) to {out_dir}")
 
 
 if __name__ == "__main__":
