@@ -209,7 +209,51 @@ def plot_summary(summary_normal, summary_noise, summary_disturbance, output_dir:
         plt.close()
 
 
-def plot_combined_summary(summary_normal, summary_noise, summary_disturbance, output_dir: Path, sweep_label="negative"):
+def summary_lookup(summary):
+    lookup = {}
+    if summary is None:
+        return lookup
+
+    for param_group, param_data in summary.items():
+        for param_name, success_rate in param_data:
+            lookup[(param_group, param_name)] = success_rate
+
+    return lookup
+
+
+def find_stable_all_points(summary_all, summary_negative, summary_zero, summary_positive, tolerance=0.10):
+    stable_points = set()
+    all_lookup = summary_lookup(summary_all)
+    negative_lookup = summary_lookup(summary_negative)
+    zero_lookup = summary_lookup(summary_zero)
+    positive_lookup = summary_lookup(summary_positive)
+
+    for key, all_rate in all_lookup.items():
+        if key not in negative_lookup or key not in zero_lookup or key not in positive_lookup:
+            continue
+
+        rates = [
+            all_rate,
+            negative_lookup[key],
+            zero_lookup[key],
+            positive_lookup[key],
+        ]
+        if max(rates) - min(rates) <= tolerance:
+            stable_points.add(key)
+
+    return stable_points
+
+
+def plot_combined_summary(
+    summary_normal,
+    summary_noise,
+    summary_disturbance,
+    output_dir: Path,
+    sweep_label="negative",
+    stable_normal=None,
+    stable_noise=None,
+    stable_disturbance=None,
+):
     """Create a combined plot showing all parameter groups together."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -247,16 +291,49 @@ def plot_combined_summary(summary_normal, summary_noise, summary_disturbance, ou
         color="steelblue",
         label="Normal",
     )
+    stable_normal = stable_normal or set()
+    stable_noise = stable_noise or set()
+    stable_disturbance = stable_disturbance or set()
+    fully_stable_points = set()
+    if sweep_label == "all":
+        fully_stable_points = stable_normal & stable_noise & stable_disturbance
+
+    if sweep_label == "all":
+        stable_normal_x = []
+        stable_normal_y = []
+        for param_name, success_rate, param_group in all_data:
+            if (param_group, param_name) in stable_normal:
+                stable_normal_x.append(x_map[(param_group, param_name)])
+                stable_normal_y.append(success_rate)
+
+        if stable_normal_x:
+            plt.plot(
+                stable_normal_x,
+                stable_normal_y,
+                marker="o",
+                linestyle="None",
+                markersize=9,
+                markerfacecolor="steelblue",
+                markeredgecolor="black",
+                markeredgewidth=2,
+                color="steelblue",
+                label="_nolegend_",
+            )
 
     if summary_noise is not None:
         noise_x = []
         noise_y = []
+        stable_noise_x = []
+        stable_noise_y = []
         for param_group, param_data in summary_noise.items():
             for param_name, success_rate in param_data:
                 key = (param_group, param_name)
                 if key in x_map:
                     noise_x.append(x_map[key])
                     noise_y.append(success_rate)
+                    if sweep_label == "all" and key in stable_noise:
+                        stable_noise_x.append(x_map[key])
+                        stable_noise_y.append(success_rate)
 
         plt.plot(
             noise_x,
@@ -267,16 +344,32 @@ def plot_combined_summary(summary_normal, summary_noise, summary_disturbance, ou
             color="orange",
             label="Noise",
         )
+        if stable_noise_x:
+            plt.plot(
+                stable_noise_x,
+                stable_noise_y,
+                marker="x",
+                linestyle="None",
+                markersize=10,
+                markeredgewidth=3,
+                color="black",
+                label="_nolegend_",
+            )
 
     if summary_disturbance is not None:
         disturbance_x = []
         disturbance_y = []
+        stable_disturbance_x = []
+        stable_disturbance_y = []
         for param_group, param_data in summary_disturbance.items():
             for param_name, success_rate in param_data:
                 key = (param_group, param_name)
                 if key in x_map:
                     disturbance_x.append(x_map[key])
                     disturbance_y.append(success_rate)
+                    if sweep_label == "all" and key in stable_disturbance:
+                        stable_disturbance_x.append(x_map[key])
+                        stable_disturbance_y.append(success_rate)
 
         plt.plot(
             disturbance_x,
@@ -287,6 +380,19 @@ def plot_combined_summary(summary_normal, summary_noise, summary_disturbance, ou
             color="green",
             label="Disturbance",
         )
+        if stable_disturbance_x:
+            plt.plot(
+                stable_disturbance_x,
+                stable_disturbance_y,
+                marker="s",
+                linestyle="None",
+                markersize=9,
+                markerfacecolor="green",
+                markeredgecolor="black",
+                markeredgewidth=2,
+                color="green",
+                label="_nolegend_",
+            )
 
     plt.title(f"Success Rate by All Parameters ({sweep_label.capitalize()} Sweep) - Combined")
     plt.xlabel("Parameter Name")
@@ -298,8 +404,30 @@ def plot_combined_summary(summary_normal, summary_noise, summary_disturbance, ou
     ax = plt.gca()
     for i, (label, color) in enumerate(zip(param_names, colors)):
         ax.get_xticklabels()
-        ax.text(i, -0.12, label, ha="center", va="top", fontsize=8, rotation=90,
-                transform=ax.get_xaxis_transform(), color=color, weight="bold")
+        label_key = (param_groups[i], label)
+        label_box = None
+        label_weight = "bold"
+        if label_key in fully_stable_points:
+            label_weight = "heavy"
+            label_box = {
+                "boxstyle": "round,pad=0.2",
+                "facecolor": "lemonchiffon",
+                "edgecolor": "black",
+                "linewidth": 1.2,
+            }
+        ax.text(
+            i,
+            -0.12,
+            label,
+            ha="center",
+            va="top",
+            fontsize=8,
+            rotation=90,
+            transform=ax.get_xaxis_transform(),
+            color=color,
+            weight=label_weight,
+            bbox=label_box,
+        )
     ax.set_xticks(x)
     ax.set_xticklabels([""] * len(param_names))
     
@@ -311,6 +439,28 @@ def plot_combined_summary(summary_normal, summary_noise, summary_disturbance, ou
         Line2D([0], [0], marker="x", color="orange", linestyle="None", label="Noise"),
         Line2D([0], [0], marker="s", color="green", linestyle="None", label="Disturbance"),
     ]
+    if sweep_label == "all":
+        dataset_legend.append(
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                markerfacecolor="white",
+                markeredgecolor="black",
+                markeredgewidth=2,
+                color="black",
+                linestyle="None",
+                label="<=10% variation across all/negative/zero/positive",
+            )
+        )
+        if fully_stable_points:
+            dataset_legend.append(
+                Patch(
+                    facecolor="lemonchiffon",
+                    edgecolor="black",
+                    label="X label: Normal, Noise, and Disturbance all stable",
+                )
+            )
     group_legend = [Patch(facecolor=colors_map[pg], label=pg) for pg in summary_normal.keys()]
     dataset_legend_artist = ax.legend(handles=dataset_legend, loc="upper left")
     ax.add_artist(dataset_legend_artist)
@@ -375,6 +525,29 @@ def main():
     if not summary_normal:
         raise SystemExit("No valid rows found to plot.")
 
+    stable_normal = set()
+    stable_noise = set()
+    stable_disturbance = set()
+    if args.sweep_label == "all":
+        stable_normal = find_stable_all_points(
+            summary_normal,
+            build_summary(all_rows_normal, sweep_label="negative"),
+            build_summary(all_rows_normal, sweep_label="zero"),
+            build_summary(all_rows_normal, sweep_label="positive"),
+        )
+        stable_noise = find_stable_all_points(
+            summary_noise,
+            build_summary(all_rows_noise, sweep_label="negative"),
+            build_summary(all_rows_noise, sweep_label="zero"),
+            build_summary(all_rows_noise, sweep_label="positive"),
+        )
+        stable_disturbance = find_stable_all_points(
+            summary_disturbance,
+            build_summary(all_rows_disturbance, sweep_label="negative"),
+            build_summary(all_rows_disturbance, sweep_label="zero"),
+            build_summary(all_rows_disturbance, sweep_label="positive"),
+        )
+
     if args.sweep_label == "positive":
         out_dir = Path.cwd() / "Success_rate_comparison_plots_positive"
     elif args.sweep_label == "zero":
@@ -385,7 +558,16 @@ def main():
         out_dir = Path.cwd() / "Success_rate_comparison_plots_negative"
 
     plot_summary(summary_normal, summary_noise, summary_disturbance, out_dir, sweep_label=args.sweep_label)
-    plot_combined_summary(summary_normal, summary_noise, summary_disturbance, out_dir, sweep_label=args.sweep_label)
+    plot_combined_summary(
+        summary_normal,
+        summary_noise,
+        summary_disturbance,
+        out_dir,
+        sweep_label=args.sweep_label,
+        stable_normal=stable_normal,
+        stable_noise=stable_noise,
+        stable_disturbance=stable_disturbance,
+    )
     print(f"Saved plots for {len(summary_normal)} parameter groups ({args.sweep_label}) to {out_dir}")
 
 
