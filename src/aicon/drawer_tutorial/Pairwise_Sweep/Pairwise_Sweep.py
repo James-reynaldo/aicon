@@ -3,6 +3,7 @@ import copy
 import itertools
 import os
 import hashlib
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 import numpy as np
@@ -10,7 +11,7 @@ import numpy as np
 from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
 from aicon.middleware.python_sequential import build_components, run_component_sequence
-from aicon.drawer_tutorial.Experiment_store import ExperimentStore
+from aicon.drawer_tutorial.Experiment_store import ExperimentStore, _hash_config
 
 from aicon.drawer_tutorial.Sweep import (
     setup_env,
@@ -213,6 +214,45 @@ def make_compact_id(job: dict) -> str:
     return f"{ts}-{h}"
 
 
+def get_data_directory(disturbance: float = None, noise_scale: float = None) -> Path:
+    if disturbance != 0:
+        return DATA_DIR_DISTURBANCE
+    if noise_scale != 0:
+        return DATA_DIR_NOISE
+    return DATA_DIR_NORMAL
+
+
+def count_existing_trials(db_path: Path, params: dict) -> int:
+    """Return how many trials already exist for this exact parameter config."""
+    if not db_path.exists():
+        return 0
+
+    config_id = _hash_config(params)
+    db_uri = f"file:{db_path}?mode=ro"
+
+    with sqlite3.connect(db_uri, uri=True, timeout=60) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'trials'
+            """
+        )
+        if cur.fetchone() is None:
+            return 0
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM trials
+            WHERE config_id = ?
+            """,
+            (config_id,),
+        )
+        return int(cur.fetchone()[0])
+
+
 def main(job_index:int, disturbance:float=None, noise_scale:float=None):
     jobs = get_all_jobs()
     print("total jobs:", len(jobs))
@@ -227,22 +267,26 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
         f"({job.get('sweep_label', '')})"
     )
 
+    print("trial params:", job["trial_params"])
+
+    directory = get_data_directory(disturbance=disturbance, noise_scale=noise_scale)
+    directory.mkdir(exist_ok=True, parents=True)
+    db_path = directory / "experiment_store.db"
+
+    existing_trials = count_existing_trials(db_path, job["trial_params"])
+    if existing_trials > 0:
+        print(
+            f"[HPC] Skipping job {job_index}: config already has "
+            f"{existing_trials} trial(s) in {db_path}"
+        )
+        return
+
     initial_panda_qpos = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
 
     env = setup_env(render=RENDER, initial_qpos=initial_panda_qpos)
 
-    print("trial params:", job["trial_params"])
-
     results = []
 
-    if disturbance != 0:
-        directory = DATA_DIR_DISTURBANCE
-    elif noise_scale != 0:
-        directory = DATA_DIR_NOISE
-    else:
-        directory = DATA_DIR_NORMAL
-    directory.mkdir(exist_ok=True, parents=True)
-    db_path = directory / "experiment_store.db"
     store = ExperimentStore(str(db_path))
 
     job_metadata = {
