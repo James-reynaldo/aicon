@@ -11,6 +11,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+ONE_D_LABELS_TO_INCLUDE = {"x0.5", "0.5x", "x2", "2x"}
+
+
 def parse_pair(metadata):
     """Return the two swept parameter labels from pairwise sweep metadata."""
     if not metadata:
@@ -41,7 +44,23 @@ def parse_pair(metadata):
     return None
 
 
-def read_pairwise_successes(db_path):
+def merge_one_d_successes(successes_by_pair, one_d_successes_by_parameter):
+    """Add relevant 1d sweep successes to each pairwise success group."""
+    merged_successes = {}
+    included_one_d_trials = 0
+
+    for pair, pairwise_successes in successes_by_pair.items():
+        successes = list(pairwise_successes)
+        for parameter in pair:
+            one_d_successes = one_d_successes_by_parameter.get(parameter, [])
+            successes.extend(one_d_successes)
+            included_one_d_trials += len(one_d_successes)
+        merged_successes[pair] = successes
+
+    return merged_successes, included_one_d_trials
+
+
+def read_successes(db_path):
     conn = sqlite3.connect(db_path)
     try:
         rows = conn.execute(
@@ -55,6 +74,7 @@ def read_pairwise_successes(db_path):
         conn.close()
 
     successes_by_pair = defaultdict(list)
+    one_d_successes_by_parameter = defaultdict(list)
     skipped = 0
 
     for success, metadata_json in rows:
@@ -64,17 +84,34 @@ def read_pairwise_successes(db_path):
             skipped += 1
             continue
 
-        if metadata.get("experiment_type") != "pairwise_sweep":
+        experiment_type = metadata.get("experiment_type")
+
+        if experiment_type == "1d_sweep":
+            if metadata.get("label") not in ONE_D_LABELS_TO_INCLUDE:
+                continue
+
+            parameter = metadata.get("parameter")
+            if not parameter:
+                skipped += 1
+                continue
+
+            one_d_successes_by_parameter[parameter].append(float(success))
             continue
 
-        pair = parse_pair(metadata)
-        if pair is None or len(pair) != 2:
-            skipped += 1
+        if experiment_type == "pairwise_sweep":
+            pair = parse_pair(metadata)
+            if pair is None or len(pair) != 2:
+                skipped += 1
+                continue
+
+            successes_by_pair[tuple(sorted(pair))].append(float(success))
             continue
 
-        successes_by_pair[tuple(sorted(pair))].append(float(success))
+    successes_by_pair, included_one_d_trials = merge_one_d_successes(
+        successes_by_pair, one_d_successes_by_parameter
+    )
 
-    return successes_by_pair, skipped
+    return successes_by_pair, skipped, included_one_d_trials
 
 
 def build_matrix(successes_by_pair):
@@ -98,6 +135,26 @@ def short_label(label):
     return label.split(".")[-1]
 
 
+def row_label_highlights(matrix):
+    """Return row label highlight colors based on row means vs the table mean."""
+    table_mean = np.nanmean(matrix)
+    row_means = np.nanmean(matrix, axis=1)
+    highlights = []
+
+    boundary = 0.05
+    for row_mean in row_means:
+        if np.isnan(row_mean) or np.isnan(table_mean):
+            highlights.append(None)
+        elif row_mean >= (1 + boundary) * table_mean:
+            highlights.append("#fff176")
+        elif row_mean <= (1 - boundary) * table_mean:
+            highlights.append("#ef5350")
+        else:
+            highlights.append(None)
+
+    return highlights
+
+
 def plot_matrix(parameters, matrix, output_path):
     size = max(7.0, 0.45 * len(parameters) + 2.5)
     fig, ax = plt.subplots(figsize=(size, size))
@@ -110,6 +167,16 @@ def plot_matrix(parameters, matrix, output_path):
     labels = [short_label(param) for param in parameters]
     ax.set_xticks(np.arange(len(parameters)), labels=labels, rotation=45, ha="right")
     ax.set_yticks(np.arange(len(parameters)), labels=labels)
+    for tick_label, highlight in zip(ax.get_yticklabels(), row_label_highlights(matrix)):
+        if highlight is None:
+            continue
+        tick_label.set_bbox(
+            {
+                "boxstyle": "square,pad=0.2",
+                "facecolor": highlight,
+                "edgecolor": "none",
+            }
+        )
     ax.set_title("Pairwise Sweep Mean Success Rate")
 
     ax.set_xticks(np.arange(-0.5, len(parameters), 1), minor=True)
@@ -154,7 +221,7 @@ def main():
         raise SystemExit(f"Database not found: {args.db_path}")
 
     output_path = args.output or args.db_path.with_name("pairwise_success_rate_table.png")
-    successes_by_pair, skipped = read_pairwise_successes(args.db_path)
+    successes_by_pair, skipped, included_one_d_trials = read_successes(args.db_path)
     if not successes_by_pair:
         raise SystemExit("No pairwise_sweep trials found in the database.")
 
@@ -164,8 +231,9 @@ def main():
     total_trials = sum(len(successes) for successes in successes_by_pair.values())
     print(f"Saved {output_path}")
     print(f"Averaged {total_trials} trials across {len(successes_by_pair)} parameter pairs.")
+    print(f"Included {included_one_d_trials} x0.5/x2 1d_sweep trials in pair averages.")
     if skipped:
-        print(f"Skipped {skipped} malformed pairwise rows.")
+        print(f"Skipped {skipped} malformed rows.")
 
 
 if __name__ == "__main__":

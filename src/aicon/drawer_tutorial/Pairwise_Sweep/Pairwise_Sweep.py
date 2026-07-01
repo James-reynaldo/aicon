@@ -69,30 +69,19 @@ DATA_DIR_NORMAL = DATA_DIR / "normal"
 # ============================================================================
 
 # SWEEP_ESTIMATOR_GROUPS = {"drawer_position": ["meas_noise_factor", "R_add_scale"]}
-SWEEP_ESTIMATOR_GROUPS = {"drawer_position": [
-    "depth_prior",
-    "initial_uncertainty_scale",
-    "initial_uncertainty_xy",
-    "initial_uncertainty_depth",
-    "initial_uncertainty_xy_none",
-    "initial_uncertainty_depth_none",
-    "sample_init_mean_likelihood_threshold",
-    "sample_init_mean_distance_threshold",
-    "sample_init_mean_uncertainty_multiplier",
-
-    "meas_noise_factor",
-    "visual_likelihood_steepness",
-    "R_add_scale",
-    "measurement_nan_reject_scale",
-    "forward_noise_grasped_coeff", 
-    "forward_noise_base", 
-    "grasped_update_R_scale", 
-    "grasped_outlier_rejection_threshold", 
-    "measurement_existence_threshold", 
-    "grasped_uncertainty_threshold", 
-    "missed_absent_measurement_uncertainty_coeff",
-    "hand_change_recovery_time",
-    "tf_lookup_timeout",
+SWEEP_ESTIMATOR_GROUPS = {"kinematic_joint": [
+    "initial_azimuth_default",
+    "initial_elevation_default",
+    "grasped_noise",
+    "ungrasped_noise",
+    "axis_azimuth_process_noise",
+    "axis_elevation_process_noise",
+    "joint_process_noise",
+    "anchor_process_noise", # Does not seem to matter
+    "grasp_threshold", # Does not matter much, just not zero
+    "grasp_floor", # When value too high, estimation error quite big
+    "outlier_rejection_treshold",
+    "shift_clip_min",
 ]}
 SWEEP_CONNECTION_GROUPS = {}  # Include connection parameters
 # SWEEP_CONNECTION_GROUPS = {"DistGraspHandConnection": ["ft_noise_offset"]}  # Include connection parameters
