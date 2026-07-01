@@ -70,21 +70,92 @@ DATA_DIR_NORMAL = DATA_DIR / "normal"
 # ============================================================================
 
 # SWEEP_ESTIMATOR_GROUPS = {"drawer_position": ["meas_noise_factor", "R_add_scale"]}
-SWEEP_ESTIMATOR_GROUPS = {"kinematic_joint": [
-    "initial_azimuth_default",
-    "initial_elevation_default",
-    "grasped_noise",
-    "ungrasped_noise",
-    "axis_azimuth_process_noise",
-    "axis_elevation_process_noise",
-    "joint_process_noise",
-    "anchor_process_noise", # Does not seem to matter
-    "grasp_threshold", # Does not matter much, just not zero
-    "grasp_floor", # When value too high, estimation error quite big
-    "outlier_rejection_treshold",
-    "shift_clip_min",
-]}
-SWEEP_CONNECTION_GROUPS = {}  # Include connection parameters
+SWEEP_ESTIMATOR_GROUPS = {"drawer_position": [
+    "depth_prior",
+    "initial_uncertainty_scale", # maybe no
+    "initial_uncertainty_xy", # maybe no
+    "initial_uncertainty_depth", # maybe no
+    "initial_uncertainty_xy_none", # no need
+    "initial_uncertainty_depth_none",# no need
+    "sample_init_mean_likelihood_threshold", # no need
+    "sample_init_mean_distance_threshold", # no need
+    "sample_init_mean_uncertainty_multiplier", # no need
+
+    "meas_noise_factor",
+    "visual_likelihood_steepness", 
+    "R_add_scale", 
+    "measurement_nan_reject_scale", 
+    "forward_noise_grasped_coeff", 
+    "forward_noise_base",  
+    "grasped_update_R_scale", 
+    "grasped_outlier_rejection_threshold",
+    "measurement_existence_threshold",
+    "grasped_uncertainty_threshold",
+    "missed_absent_measurement_uncertainty_coeff", 
+    "hand_change_recovery_time", 
+    "tf_lookup_timeout"],
+
+    "kinematic_joint": [
+        "initial_azimuth_default",
+        "initial_elevation_default",
+        "grasped_noise",
+        "ungrasped_noise",
+        "axis_azimuth_process_noise",
+        "axis_elevation_process_noise",
+        "joint_process_noise",
+        "anchor_process_noise", # Does not seem to matter
+        "grasp_threshold", # Does not matter much, just not zero
+        "grasp_floor", # When value too high, estimation error quite big
+        "outlier_rejection_treshold",
+        "shift_clip_min",],
+    "grasp_likelihood": [
+        "initial_likelihood", # Seem to not matter at all
+        "initially_grasped_likelihood",
+        "baseline_measurement_likelihood",
+        "initial_clip_min",
+        "initial_clip_max",
+        "initial_time_since_hand_change",
+
+        "gripper_activation_threshold",
+        "close_distance_threshold",
+        "uncertainty_dist_threshold",
+        "hand_change_time_threshold",
+        "force_time_scale",
+        "force_time_max",
+        "low_likelihood_threshold",
+        "negative_innovation_threshold",
+        "negative_innovation_scale",
+        ],
+    "visible": [
+        "initial_likelihood_prior",
+        "initial_clip_min",
+        "initial_clip_max",
+
+        "update_gain",
+        ],
+    "ee_pose": [
+        "initial_uncertainty_scale", # Seem to not matter at all
+        "action_process_noise", # Seem to not matter so much, just not negative (fail)
+        "proprio_update_noise",
+        ],
+    }
+SWEEP_CONNECTION_GROUPS = {"DistGraspHandConnection": [
+        "dist_decay",
+        "close_dist_threshold",
+        "ft_noise_offset",
+        "low_likelihood_threshold",
+        "gripper_activation_threshold",
+        "uncertainty_dist_threshold",
+        "small_likelihood_value",
+
+        "uncertainty_bias",
+        "uncertainty_scale_uncertainty",
+        "uncertainty_scale_relevance",
+        "dist_sigmoid_scale",
+        "time_since_hand_change_threshold",
+        "ft_tresh_multiplier",
+        "ft_tresh_cap",
+        ],}  # Include connection parameters
 # SWEEP_CONNECTION_GROUPS = {"DistGraspHandConnection": ["ft_noise_offset"]}  # Include connection parameters
 
 def get_default_estimator_params():

@@ -51,7 +51,7 @@ def get_all_jobs():
     standard_job = get_standard_job(base_params)
     standard_job["trial_params"]["connection_params"] = copy.deepcopy(base_conn_params)
 
-    return [standard_job] + jobs_est + jobs_conn
+    return jobs_est + jobs_conn
 
 
 def main(job_index: int, disturbance: float = None, noise_scale: float = None):
