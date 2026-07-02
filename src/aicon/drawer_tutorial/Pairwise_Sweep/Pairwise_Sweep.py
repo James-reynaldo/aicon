@@ -4,6 +4,8 @@ import itertools
 import os
 import hashlib
 import sqlite3
+import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 import numpy as np
@@ -12,6 +14,8 @@ from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
 from aicon.middleware.python_sequential import build_components, run_component_sequence
 from aicon.drawer_tutorial.Experiment_store import ExperimentStore, _hash_config
+
+import time
 
 from aicon.drawer_tutorial.Sweep import (
     setup_env,
@@ -259,6 +263,10 @@ def get_all_jobs():
                     "job_name": "|".join(job_names),
                 }
             )
+            
+            # If job param_name is close_distance_threshold,joint_process_noise, print job number
+            # if job_names == ["DistGraspHandConnection.close_dist_threshold=x2", "kinematic_joint.joint_process_noise=x0.2"]:
+            #     print(f"Job index for {job_names}: {len(jobs)-1}")
 
     return jobs
 
@@ -271,7 +279,6 @@ def get_sweep_values(standard_value, param_name: str = None):
     return [
         ("x0.2", 0.2 * standard_value),
         ("x0.5", 0.5 * standard_value),
-        ("standard", standard_value),
         ("x2", 2.0 * standard_value),
         ("x5", 5.0 * standard_value),
     ]
@@ -344,12 +351,15 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
     directory.mkdir(exist_ok=True, parents=True)
     db_path = directory / "experiment_store.db"
 
+    start_timer = time.time()
     existing_trials = count_existing_trials(db_path, job["trial_params"])
     if existing_trials > 0:
         print(
             f"[HPC] Skipping job {job_index}: config already has "
             f"{existing_trials} trial(s) in {db_path}"
         )
+        end_timer = time.time()
+        print(f"[HPC] Counted existing trials in {end_timer - start_timer:.2f} seconds.")
         return
 
     initial_panda_qpos = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
@@ -458,14 +468,138 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
         store.close()
 
     print(f"Experiment database saved to: {db_path}")
+
+
+def _normalize_csv(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    return ",".join(parts)
+
+
+def find_jobs(
+    parameters: str | None = None,
+    sweep_labels: str | None = None,
+    job_name_contains: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Return matching jobs and print compact results with job indices."""
+    parameters = _normalize_csv(parameters)
+    sweep_labels = _normalize_csv(sweep_labels)
+
+    jobs = get_all_jobs()
+    matches = []
+
+    for idx, job in enumerate(jobs):
+        job_parameters = f"{job['group_name']}.{job['param_name']}"
+        job_sweep_labels = _normalize_csv(job["sweep_label"])
+        job_name = job.get("job_name", "")
+
+        if parameters is not None and job_parameters != parameters:
+            continue
+        if sweep_labels is not None and job_sweep_labels != sweep_labels:
+            continue
+        if job_name_contains is not None and job_name_contains not in job_name:
+            continue
+
+        matches.append(
+            {
+                "job_index": idx,
+                "job_name": job_name,
+                "parameters": job_parameters,
+                "sweep_labels": job["sweep_label"],
+            }
+        )
+
+    print(f"total jobs: {len(jobs)}")
+    print(
+        "find filters:",
+        {
+            "experiment_type": "pairwise_sweep",
+            "parameters": parameters,
+            "sweep_labels": sweep_labels,
+            "job_name_contains": job_name_contains,
+        },
+    )
+    print(f"matches: {len(matches)}")
+
+    for match in matches[: max(limit, 0)]:
+        print(
+            f"job_index={match['job_index']} | "
+            f"parameters={match['parameters']} | "
+            f"sweep_labels={match['sweep_labels']} | "
+            f"job_name={match['job_name']}"
+        )
+
+    if len(matches) > max(limit, 0):
+        remaining = len(matches) - max(limit, 0)
+        print(f"... and {remaining} more. Increase --limit to show all.")
+
+    return matches
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run or query pairwise sweep jobs.")
+    parser.add_argument("job_index", nargs="?", type=int, help="Job index to run")
+    parser.add_argument("disturbance", nargs="?", type=float, default=0)
+    parser.add_argument("noise_scale", nargs="?", type=float, default=0)
+
+    parser.add_argument("--count-jobs", action="store_true", help="Print number of jobs")
+    parser.add_argument("--find-jobs", action="store_true", help="Find job indices by filters")
+    parser.add_argument(
+        "--find-json",
+        type=str,
+        help=(
+            "JSON filter, e.g. "
+            "'{\"experiment_type\":\"pairwise_sweep\",\"parameters\":\"kinematic_joint,kinematic_joint.initial_elevation_default,ungrasped_noise\",\"sweep_labels\":\"x0.2,x2\"}'"
+        ),
+    )
+    parser.add_argument("--parameters", type=str, help="Exact metadata parameters filter")
+    parser.add_argument("--sweep-labels", type=str, help="Exact metadata sweep_labels filter")
+    parser.add_argument("--job-name-contains", type=str, help="Substring filter on job_name")
+    parser.add_argument("--limit", type=int, default=50, help="Max printed matches")
+
+    return parser
     
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--count-jobs":
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+
+    if args.count_jobs:
         print(len(get_all_jobs()))
         sys.exit(0)
 
-    idx = int(sys.argv[1])
-    disturbance = float(sys.argv[2]) if len(sys.argv) > 2 else 0
-    noise_scale = float(sys.argv[3]) if len(sys.argv) > 3 else 0
-    main(idx, disturbance=disturbance, noise_scale=noise_scale)
+    if args.find_jobs or args.find_json is not None:
+        find_parameters = args.parameters
+        find_sweep_labels = args.sweep_labels
+        find_job_name_contains = args.job_name_contains
+
+        if args.find_json is not None:
+            try:
+                query = json.loads(args.find_json)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid --find-json payload: {exc}") from exc
+
+            experiment_type = query.get("experiment_type")
+            if experiment_type is not None and experiment_type != "pairwise_sweep":
+                print(
+                    "No matches: this script only handles experiment_type='pairwise_sweep'."
+                )
+                sys.exit(0)
+
+            find_parameters = query.get("parameters", find_parameters)
+            find_sweep_labels = query.get("sweep_labels", find_sweep_labels)
+
+        find_jobs(
+            parameters=find_parameters,
+            sweep_labels=find_sweep_labels,
+            job_name_contains=find_job_name_contains,
+            limit=args.limit,
+        )
+        sys.exit(0)
+
+    if args.job_index is None:
+        parser.error("job_index is required unless --count-jobs or --find-jobs/--find-json is used")
+
+    main(args.job_index, disturbance=args.disturbance, noise_scale=args.noise_scale)
