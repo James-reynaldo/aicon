@@ -4,8 +4,8 @@
 #SBATCH --partition=c1b,c2
 #SBATCH --mem-per-cpu=6G
 #SBATCH --time=02:00:00
-#SBATCH --output=logs_n/%A_%a.out
-#SBATCH --array=0-1319%200
+#SBATCH --output=logs/%A_%a.out
+#SBATCH --array=0-10000%200
 
 
 source $(conda info --base)/etc/profile.d/conda.sh
@@ -25,6 +25,6 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
 # Ensure logs directory exists and run Python, saving a per-job .out file
-mkdir -p logs_n
-python -u Pairwise_Sweep.py "$JOB_ID" 0 20
+mkdir -p logs
+python -u Pairwise_Sweep.py "$JOB_ID" 1
 

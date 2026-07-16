@@ -10,8 +10,16 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 import matplotlib.pyplot as plt
 import numpy as np
 
+try:
+    from scipy.cluster.hierarchy import leaves_list, linkage
+    from scipy.spatial.distance import pdist
+except ImportError:
+    leaves_list = None
+    linkage = None
+    pdist = None
 
-ONE_D_LABELS_TO_INCLUDE = {"x0.5", "0.5x", "x2", "2x"}
+
+ONE_D_LABELS_TO_INCLUDE = {"0.2x", "0.5x", "2x", "5x", "standard"}
 
 
 def parse_pair(metadata):
@@ -58,6 +66,14 @@ def merge_one_d_successes(successes_by_pair, one_d_successes_by_parameter):
         merged_successes[pair] = successes
 
     return merged_successes, included_one_d_trials
+
+
+def pair_statistics(successes):
+    if not successes:
+        return np.nan, np.nan
+
+    values = np.asarray(successes, dtype=float)
+    return float(np.mean(values)), float(np.std(values))
 
 
 def read_successes(db_path):
@@ -114,21 +130,56 @@ def read_successes(db_path):
     return successes_by_pair, skipped, included_one_d_trials
 
 
-def build_matrix(successes_by_pair):
+def build_matrices(successes_by_pair):
     parameters = sorted({param for pair in successes_by_pair for param in pair})
     index = {param: i for i, param in enumerate(parameters)}
-    matrix = np.full((len(parameters), len(parameters)), np.nan)
+    mean_matrix = np.full((len(parameters), len(parameters)), np.nan)
+    std_matrix = np.full((len(parameters), len(parameters)), np.nan)
 
     for (param_a, param_b), successes in successes_by_pair.items():
-        if not successes:
+        success_rate, std_dev = pair_statistics(successes)
+        if np.isnan(success_rate):
             continue
-        success_rate = float(np.mean(successes))
         i = index[param_a]
         j = index[param_b]
-        matrix[i, j] = success_rate
-        matrix[j, i] = success_rate
+        mean_matrix[i, j] = success_rate
+        mean_matrix[j, i] = success_rate
+        std_matrix[i, j] = std_dev
+        std_matrix[j, i] = std_dev
 
-    return parameters, matrix
+    return parameters, mean_matrix, std_matrix
+
+
+def cluster_order_for_matrix(matrix):
+    """Return row/column order from hierarchical clustering."""
+    if matrix.shape[0] <= 2:
+        return np.arange(matrix.shape[0])
+    if leaves_list is None or linkage is None or pdist is None:
+        raise SystemExit(
+            "Hierarchical clustering requires scipy. Install it with: pip install scipy"
+        )
+
+    filled = matrix.copy()
+    global_mean = np.nanmean(filled)
+    if np.isnan(global_mean):
+        global_mean = 0.0
+
+    row_means = np.nanmean(filled, axis=1)
+    row_means = np.where(np.isnan(row_means), global_mean, row_means)
+    nan_rows, nan_cols = np.where(np.isnan(filled))
+    filled[nan_rows, nan_cols] = row_means[nan_rows]
+
+    condensed = pdist(filled, metric="euclidean")
+    if condensed.size == 0 or np.allclose(condensed, 0.0):
+        return np.arange(matrix.shape[0])
+
+    return leaves_list(linkage(condensed, method="average"))
+
+
+def reorder_matrix(parameters, matrix, order):
+    ordered_parameters = [parameters[i] for i in order]
+    ordered_matrix = matrix[np.ix_(order, order)]
+    return ordered_parameters, ordered_matrix
 
 
 def short_label(label):
@@ -155,14 +206,14 @@ def row_label_highlights(matrix):
     return highlights
 
 
-def plot_matrix(parameters, matrix, output_path):
+def plot_matrix(parameters, matrix, output_path, title, colorbar_label, vmax, row_sums=None, row_sum_label=None):
     size = max(7.0, 0.45 * len(parameters) + 2.5)
     fig, ax = plt.subplots(figsize=(size, size))
 
     masked = np.ma.masked_invalid(matrix)
     cmap = plt.cm.viridis.copy()
     cmap.set_bad(color="#f2f2f2")
-    image = ax.imshow(masked, vmin=0.0, vmax=1.0, cmap=cmap)
+    image = ax.imshow(masked, vmin=0.0, vmax=vmax, cmap=cmap)
 
     labels = [short_label(param) for param in parameters]
     ax.set_xticks(np.arange(len(parameters)), labels=labels, rotation=45, ha="right")
@@ -177,7 +228,13 @@ def plot_matrix(parameters, matrix, output_path):
                 "edgecolor": "none",
             }
         )
-    ax.set_title("Pairwise Sweep Mean Success Rate")
+    ax.set_title(title)
+
+    # If requested, make room on the right for row-sum labels
+    n = len(parameters)
+    if row_sums is not None:
+        # extend x-limits to make space; image spans -0.5..n-0.5
+        ax.set_xlim(-0.5, n - 0.5 + 1.2)
 
     ax.set_xticks(np.arange(-0.5, len(parameters), 1), minor=True)
     ax.set_yticks(np.arange(-0.5, len(parameters), 1), minor=True)
@@ -189,11 +246,37 @@ def plot_matrix(parameters, matrix, output_path):
             value = matrix[i, j]
             if np.isnan(value):
                 continue
-            text_color = "white" if value < 0.55 else "black"
+            text_color = "white" if value < (0.5 * vmax) else "black"
             ax.text(j, i, f"{value:.2f}", ha="center", va="center", color=text_color, fontsize=8)
 
+    # Draw row-sum labels to the right of the matrix when provided
+    if row_sums is not None:
+        x_pos = n - 0.5 + 0.6
+        for i, s in enumerate(row_sums):
+            if s is None or (isinstance(s, float) and np.isnan(s)):
+                txt = "n/a"
+            else:
+                try:
+                    txt = f"{float(s):.2f}"
+                except Exception:
+                    txt = str(s)
+            ax.text(
+                x_pos,
+                i,
+                txt,
+                ha="left",
+                va="center",
+                fontsize=8,
+                bbox={"boxstyle": "round,pad=0.1", "facecolor": "white", "edgecolor": "none"},
+                clip_on=False,
+            )
+        # header for row sums
+        header_y = -0.8
+        label = row_sum_label or "Sum"
+        ax.text(x_pos, header_y, label, ha="left", va="bottom", fontsize=9, weight="bold", clip_on=False)
+
     colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
-    colorbar.set_label("Mean success rate")
+    colorbar.set_label(colorbar_label)
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -221,17 +304,42 @@ def main():
         raise SystemExit(f"Database not found: {args.db_path}")
 
     output_path = args.output or args.db_path.with_name("pairwise_success_rate_table.png")
+    std_output_path = output_path.with_name("pairwise_success_std_table.png")
     successes_by_pair, skipped, included_one_d_trials = read_successes(args.db_path)
     if not successes_by_pair:
         raise SystemExit("No pairwise_sweep trials found in the database.")
 
-    parameters, matrix = build_matrix(successes_by_pair)
-    plot_matrix(parameters, matrix, output_path)
+    parameters, mean_matrix, std_matrix = build_matrices(successes_by_pair)
+    plot_matrix(
+        parameters,
+        mean_matrix,
+        output_path,
+        "Pairwise Sweep Mean Success Rate",
+        "Mean success rate",
+        1.0,
+    )
+    std_order = cluster_order_for_matrix(std_matrix)
+    clustered_parameters, clustered_std_matrix = reorder_matrix(
+        parameters, std_matrix, std_order
+    )
+    # compute row sums for the clustered std matrix and show them on the right
+    clustered_row_sums = [float(np.nansum(row)) for row in clustered_std_matrix]
+    plot_matrix(
+        clustered_parameters,
+        clustered_std_matrix,
+        std_output_path,
+        "Pairwise Sweep Standard Deviation of Success (Hierarchical Clustering)",
+        "Standard deviation",
+        0.5,
+        row_sums=clustered_row_sums,
+        row_sum_label="Row sum",
+    )
 
     total_trials = sum(len(successes) for successes in successes_by_pair.values())
     print(f"Saved {output_path}")
+    print(f"Saved {std_output_path}")
     print(f"Averaged {total_trials} trials across {len(successes_by_pair)} parameter pairs.")
-    print(f"Included {included_one_d_trials} x0.5/x2 1d_sweep trials in pair averages.")
+    print(f"Included {included_one_d_trials} /x0.2/x0.5/x2/x5 1d_sweep trials in pair averages.")
     if skipped:
         print(f"Skipped {skipped} malformed rows.")
 

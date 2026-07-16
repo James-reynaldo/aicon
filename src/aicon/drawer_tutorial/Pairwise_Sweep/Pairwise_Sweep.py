@@ -35,6 +35,7 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR_DISTURBANCE = DATA_DIR / "disturbance"
 DATA_DIR_NOISE = DATA_DIR / "noise"
 DATA_DIR_NORMAL = DATA_DIR / "normal"
+DB_SHARD_PREFIX = "experiment_store_job_"
 
 # ============================================================================
 # CONFIGURATION: Choose which parameter groups to include in pairwise sweep
@@ -300,6 +301,13 @@ def get_data_directory(disturbance: float = None, noise_scale: float = None) -> 
     return DATA_DIR_NORMAL
 
 
+def get_job_db_path(directory: Path, job_index: int, job: dict) -> Path:
+    """Return a deterministic per-job database path to avoid write contention."""
+    job_key = f"{job_index}:{job.get('job_name', '')}:{job.get('group_name', '')}:{job.get('param_name', '')}:{job.get('sweep_label', '')}"
+    short_hash = hashlib.sha1(job_key.encode("utf-8")).hexdigest()[:10]
+    return directory / f"{DB_SHARD_PREFIX}{job_index:05d}_{short_hash}.db"
+
+
 def count_existing_trials(db_path: Path, params: dict) -> int:
     """Return how many trials already exist for this exact parameter config."""
     if not db_path.exists():
@@ -331,6 +339,47 @@ def count_existing_trials(db_path: Path, params: dict) -> int:
         return int(cur.fetchone()[0])
 
 
+def merge_sharded_databases(source_dir: Path, target_db: Path) -> None:
+    """Merge per-job shard databases into a single analysis database."""
+    shard_paths = sorted(source_dir.glob(f"{DB_SHARD_PREFIX}*.db"))
+    if not shard_paths:
+        print(f"[HPC] No shard databases found in {source_dir}")
+        return
+
+    target_db.parent.mkdir(parents=True, exist_ok=True)
+    target_store = ExperimentStore(str(target_db))
+
+    try:
+        for shard_path in shard_paths:
+            if shard_path.resolve() == target_db.resolve():
+                continue
+
+            print(f"[HPC] Merging {shard_path.name} into {target_db.name}")
+            try:
+                target_store.conn.execute("ATTACH DATABASE ? AS srcdb", (str(shard_path),))
+                target_store.conn.execute("BEGIN")
+                target_store.conn.execute(
+                    "INSERT OR IGNORE INTO configs (config_id, params) SELECT config_id, params FROM srcdb.configs"
+                )
+                target_store.conn.execute(
+                    """
+                    INSERT INTO trials (config_id, seed, success, timesteps, error, metadata)
+                    SELECT config_id, seed, success, timesteps, error, metadata
+                    FROM srcdb.trials
+                    """
+                )
+                target_store.conn.commit()
+            finally:
+                try:
+                    target_store.conn.execute("DETACH DATABASE srcdb")
+                except Exception:
+                    pass
+
+        print(f"[HPC] Merge complete: {target_db}")
+    finally:
+        target_store.close()
+
+
 def main(job_index:int, disturbance:float=None, noise_scale:float=None):
     jobs = get_all_jobs()
     print("total jobs:", len(jobs))
@@ -349,7 +398,7 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
 
     directory = get_data_directory(disturbance=disturbance, noise_scale=noise_scale)
     directory.mkdir(exist_ok=True, parents=True)
-    db_path = directory / "experiment_store.db"
+    db_path = get_job_db_path(directory, job_index, job)
 
     start_timer = time.time()
     existing_trials = count_existing_trials(db_path, job["trial_params"])
@@ -467,7 +516,7 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
             pass
         store.close()
 
-    print(f"Experiment database saved to: {db_path}")
+    print(f"Experiment shard database saved to: {db_path}")
 
 
 def _normalize_csv(value: str | None) -> str | None:
@@ -538,6 +587,47 @@ def find_jobs(
     return matches
 
 
+def find_jobs_by_config_id(config_id: str, limit: int = 50) -> list[dict]:
+    """Return matching jobs for a given config_id."""
+    config_id = config_id.strip().lower()
+    jobs = get_all_jobs()
+    matches = []
+
+    for idx, job in enumerate(jobs):
+        job_config_id = _hash_config(job["trial_params"])
+        if job_config_id != config_id:
+            continue
+
+        matches.append(
+            {
+                "job_index": idx,
+                "job_name": job.get("job_name", ""),
+                "parameters": f"{job['group_name']}.{job['param_name']}",
+                "sweep_labels": job["sweep_label"],
+                "config_id": job_config_id,
+            }
+        )
+
+    print(f"total jobs: {len(jobs)}")
+    print(f"find config_id: {config_id}")
+    print(f"matches: {len(matches)}")
+
+    for match in matches[: max(limit, 0)]:
+        print(
+            f"job_index={match['job_index']} | "
+            f"config_id={match['config_id']} | "
+            f"parameters={match['parameters']} | "
+            f"sweep_labels={match['sweep_labels']} | "
+            f"job_name={match['job_name']}"
+        )
+
+    if len(matches) > max(limit, 0):
+        remaining = len(matches) - max(limit, 0)
+        print(f"... and {remaining} more. Increase --limit to show all.")
+
+    return matches
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run or query pairwise sweep jobs.")
     parser.add_argument("job_index", nargs="?", type=int, help="Job index to run")
@@ -554,10 +644,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "'{\"experiment_type\":\"pairwise_sweep\",\"parameters\":\"kinematic_joint,kinematic_joint.initial_elevation_default,ungrasped_noise\",\"sweep_labels\":\"x0.2,x2\"}'"
         ),
     )
+    parser.add_argument("--find-config-id", type=str, help="Find job indices by config_id")
     parser.add_argument("--parameters", type=str, help="Exact metadata parameters filter")
     parser.add_argument("--sweep-labels", type=str, help="Exact metadata sweep_labels filter")
     parser.add_argument("--job-name-contains", type=str, help="Substring filter on job_name")
     parser.add_argument("--limit", type=int, default=50, help="Max printed matches")
+    parser.add_argument("--merge-shards", action="store_true", help="Merge shard databases into a single experiment_store.db")
+    parser.add_argument("--merge-target", type=Path, help="Target database path for --merge-shards")
 
     return parser
     
@@ -570,7 +663,13 @@ if __name__ == "__main__":
         print(len(get_all_jobs()))
         sys.exit(0)
 
-    if args.find_jobs or args.find_json is not None:
+    if args.merge_shards:
+        directory = get_data_directory(disturbance=args.disturbance, noise_scale=args.noise_scale)
+        target_db = args.merge_target or (directory / "experiment_store.db")
+        merge_sharded_databases(directory, target_db)
+        sys.exit(0)
+
+    if args.find_jobs or args.find_json is not None or args.find_config_id is not None:
         find_parameters = args.parameters
         find_sweep_labels = args.sweep_labels
         find_job_name_contains = args.job_name_contains
@@ -590,6 +689,10 @@ if __name__ == "__main__":
 
             find_parameters = query.get("parameters", find_parameters)
             find_sweep_labels = query.get("sweep_labels", find_sweep_labels)
+
+        if args.find_config_id is not None:
+            find_jobs_by_config_id(args.find_config_id, limit=args.limit)
+            sys.exit(0)
 
         find_jobs(
             parameters=find_parameters,

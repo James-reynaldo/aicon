@@ -169,21 +169,21 @@ def get_default_connection_params():
         }
     }
 
-# def get_sweep_values(standard_value):
-#     return [
-#         ("negative", -standard_value),
-#         ("zero", 0.0),
-#         ("x0.001", 0.001 * standard_value),
-#         ("x0.5", 0.5 * standard_value),
-#         ("x2", 2.0 * standard_value),
-#         ("x1000", 1000.0 * standard_value),
-#     ]
-
 def get_sweep_values(standard_value):
     return [
-        ("x0.2", 0.2 * standard_value),
-        ("x5", 5.0 * standard_value),
+        ("negative", -standard_value),
+        ("zero", 0.0),
+        ("x0.001", 0.001 * standard_value),
+        ("x0.5", 0.5 * standard_value),
+        ("x2", 2.0 * standard_value),
+        ("x1000", 1000.0 * standard_value),
     ]
+
+# def get_sweep_values(standard_value):
+#     return [
+#         ("x0.2", 0.2 * standard_value),
+#         ("x5", 5.0 * standard_value),
+#     ]
 
 
 def get_standard_job(base_params):

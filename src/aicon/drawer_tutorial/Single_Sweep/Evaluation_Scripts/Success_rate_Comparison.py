@@ -105,19 +105,39 @@ def build_summary(rows, sweep_label="negative"):
         # For "negative" or "zero", filter exactly
         filtered_rows = [row for row in rows if row.get("sweep_label") == sweep_label]
     
-    grouped = defaultdict(lambda: defaultdict(list))
+    # Group by param_group -> param_name -> sweep_value_label -> list of 0/1 successes
+    grouped = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     for row in filtered_rows:
         param_group = row.get("param_group", "")
         param_name = row["param_name"]
-        grouped[param_group][param_name].append(row["success"])
+        sweep_val = row.get("sweep_label", "")
+        grouped[param_group][param_name][sweep_val].append(1 if row["success"] else 0)
 
     summary = {}
     for param_group, param_dict in grouped.items():
         summary[param_group] = []
-        for param_name, successes in param_dict.items():
-            success_rate = sum(successes) / len(successes) if successes else 0.0
-            summary[param_group].append((param_name, success_rate))
-        # Sort by success rate (ascending)
+        for param_name, sweep_map in param_dict.items():
+            # compute success rate per sweep-value, then mean+var over those rates
+            rates = []
+            for sweep_val, trials in sweep_map.items():
+                if not trials:
+                    continue
+                rate = float(np.sum(trials)) / float(len(trials))
+                rates.append(rate)
+
+            if rates:
+                mean = float(np.mean(rates))
+                var = float(np.var(rates))
+                count = len(rates)
+            else:
+                mean = 0.0
+                var = 0.0
+                count = 0
+
+            # store (param_name, mean, variance, count_of_sweep_values)
+            summary[param_group].append((param_name, mean, var, count))
+
+        # Sort by mean success rate (ascending)
         summary[param_group].sort(key=lambda x: x[1])
 
     return summary
@@ -136,6 +156,7 @@ def plot_summary(summary_normal, summary_noise, summary_disturbance, output_dir:
         # X-axis comes from the normal summary
         param_names = [item[0] for item in normal_data]
         normal_rates = [item[1] for item in normal_data]
+        normal_vars = [item[2] if len(item) > 2 else 0.0 for item in normal_data]
         x = list(range(len(param_names)))
 
         # Map parameter name -> x index
@@ -143,56 +164,90 @@ def plot_summary(summary_normal, summary_noise, summary_disturbance, output_dir:
 
         plt.figure(figsize=(12, 6))
 
-        # Plot normal
+        # Plot normal (connect neighboring x points)
         plt.plot(
             x,
             normal_rates,
             marker="o",
-            linestyle="None",
+            linestyle="-",
             color="steelblue",
             linewidth=2,
             label="Normal",
         )
 
+        # Shade variance for positive sweep
+        if sweep_label == "positive":
+            stds = np.sqrt(np.array(normal_vars))
+            lower = np.clip(np.array(normal_rates) - stds, 0.0, 1.0)
+            upper = np.clip(np.array(normal_rates) + stds, 0.0, 1.0)
+            plt.fill_between(x, lower, upper, color="steelblue", alpha=0.15)
+
         # Plot noise on same x-axis
         if summary_noise is not None and param_group in summary_noise:
             noise_x = []
             noise_y = []
+            noise_vars = []
 
-            for name, rate in summary_noise[param_group]:
+            for item in summary_noise[param_group]:
+                name = item[0]
+                rate = item[1] if len(item) > 1 else 0.0
+                var = item[2] if len(item) > 2 else 0.0
                 if name in x_map:
                     noise_x.append(x_map[name])
                     noise_y.append(rate)
+                    noise_vars.append(var)
 
-            plt.plot(
-                noise_x,
-                noise_y,
-                marker="x",
-                linestyle="None",
-                color="orange",
-                linewidth=2,
-                label="Noise",
-            )
+            # sort by x so lines connect neighbors only
+            if noise_x:
+                pairs = sorted(zip(noise_x, noise_y, noise_vars), key=lambda t: t[0])
+                nx, ny, nvar = zip(*pairs)
+                plt.plot(
+                    list(nx),
+                    list(ny),
+                    marker="x",
+                    linestyle="-",
+                    color="orange",
+                    linewidth=2,
+                    label="Noise",
+                )
+                if sweep_label == "positive":
+                    nstd = np.sqrt(np.array(nvar))
+                    lower = np.clip(np.array(ny) - nstd, 0.0, 1.0)
+                    upper = np.clip(np.array(ny) + nstd, 0.0, 1.0)
+                    plt.fill_between(list(nx), lower, upper, color="orange", alpha=0.12)
 
         # Plot disturbance on same x-axis
         if summary_disturbance is not None and param_group in summary_disturbance:
             disturbance_x = []
             disturbance_y = []
+            disturbance_vars = []
 
-            for name, rate in summary_disturbance[param_group]:
+            for item in summary_disturbance[param_group]:
+                name = item[0]
+                rate = item[1] if len(item) > 1 else 0.0
+                var = item[2] if len(item) > 2 else 0.0
                 if name in x_map:
                     disturbance_x.append(x_map[name])
                     disturbance_y.append(rate)
+                    disturbance_vars.append(var)
 
-            plt.plot(
-                disturbance_x,
-                disturbance_y,
-                marker="s",
-                linestyle="None",
-                color="green",
-                linewidth=2,
-                label="Disturbance",
-            )
+            if disturbance_x:
+                pairs = sorted(zip(disturbance_x, disturbance_y, disturbance_vars), key=lambda t: t[0])
+                dx, dy, dvar = zip(*pairs)
+                plt.plot(
+                    list(dx),
+                    list(dy),
+                    marker="s",
+                    linestyle="-",
+                    color="green",
+                    linewidth=2,
+                    label="Disturbance",
+                )
+                if sweep_label == "positive":
+                    dstd = np.sqrt(np.array(dvar))
+                    lower = np.clip(np.array(dy) - dstd, 0.0, 1.0)
+                    upper = np.clip(np.array(dy) + dstd, 0.0, 1.0)
+                    plt.fill_between(list(dx), lower, upper, color="green", alpha=0.12)
 
         plt.title(f"Success Rate by Parameter ({sweep_label.capitalize()} Sweep) - {param_group}")
         plt.xlabel("Parameter Name")
@@ -215,7 +270,12 @@ def summary_lookup(summary):
         return lookup
 
     for param_group, param_data in summary.items():
-        for param_name, success_rate in param_data:
+        for item in param_data:
+            # item is (param_name, mean, var, count)
+            if not item:
+                continue
+            param_name = item[0]
+            success_rate = item[1] if len(item) > 1 else 0.0
             lookup[(param_group, param_name)] = success_rate
 
     return lookup
@@ -267,30 +327,40 @@ def plot_combined_summary(
     
     for idx, (param_group, param_data) in enumerate(summary_normal.items()):
         colors_map[param_group] = color_palette[idx]
-        for param_name, success_rate in sorted(param_data, key=lambda x: x[1]):
-            all_data.append((param_name, success_rate, param_group))
+        for item in sorted(param_data, key=lambda x: x[1]):
+            # item: (param_name, mean, var, count)
+            param_name = item[0]
+            success_rate = item[1] if len(item) > 1 else 0.0
+            var = item[2] if len(item) > 2 else 0.0
+            all_data.append((param_name, success_rate, var, param_group))
 
     if len(all_data) == 0:
         return
     
     param_names = [item[0] for item in all_data]
     success_rates = [item[1] for item in all_data]
-    param_groups = [item[2] for item in all_data]
+    success_vars = [item[2] for item in all_data]
+    param_groups = [item[3] for item in all_data]
     colors = [colors_map[pg] for pg in param_groups]
-    
+
     x = list(range(len(param_names)))
-    x_map = {(param_group, param_name): i for i, (param_name, _, param_group) in enumerate(all_data)}
-    
+    x_map = {(param_groups[i], param_names[i]): i for i in range(len(all_data))}
+
     plt.figure(figsize=(16, 8))
     plt.plot(
         x,
         success_rates,
         marker="o",
-        linestyle="None",
+        linestyle="-",
         linewidth=2,
         color="steelblue",
         label="Normal",
     )
+    if sweep_label == "positive":
+        stds = np.sqrt(np.array(success_vars))
+        lower = np.clip(np.array(success_rates) - stds, 0.0, 1.0)
+        upper = np.clip(np.array(success_rates) + stds, 0.0, 1.0)
+        plt.fill_between(x, lower, upper, color="steelblue", alpha=0.12)
     stable_normal = stable_normal or set()
     stable_noise = stable_noise or set()
     stable_disturbance = stable_disturbance or set()
@@ -298,6 +368,19 @@ def plot_combined_summary(
     if sweep_label == "all":
         fully_stable_points = stable_normal & stable_noise & stable_disturbance
 
+    # Add dashed separators between parameter-group blocks (always)
+    group_boundaries = []
+    if param_groups:
+        last_group = param_groups[0]
+        for i, pg in enumerate(param_groups):
+            if pg != last_group:
+                # boundary at index i (start of new group)
+                group_boundaries.append(i)
+                last_group = pg
+
+    ax = plt.gca()
+    for boundary in group_boundaries:
+        ax.axvline(boundary - 0.5, linestyle='--', color='black', alpha=0.9, linewidth=1.2, zorder=10)
     if sweep_label == "all":
         stable_normal_x = []
         stable_normal_y = []
@@ -323,27 +406,40 @@ def plot_combined_summary(
     if summary_noise is not None:
         noise_x = []
         noise_y = []
+        noise_vars = []
         stable_noise_x = []
         stable_noise_y = []
         for param_group, param_data in summary_noise.items():
-            for param_name, success_rate in param_data:
-                key = (param_group, param_name)
+            for item in param_data:
+                name = item[0]
+                rate = item[1] if len(item) > 1 else 0.0
+                var = item[2] if len(item) > 2 else 0.0
+                key = (param_group, name)
                 if key in x_map:
                     noise_x.append(x_map[key])
-                    noise_y.append(success_rate)
+                    noise_y.append(rate)
+                    noise_vars.append(var)
                     if sweep_label == "all" and key in stable_noise:
                         stable_noise_x.append(x_map[key])
-                        stable_noise_y.append(success_rate)
+                        stable_noise_y.append(rate)
 
-        plt.plot(
-            noise_x,
-            noise_y,
-            marker="x",
-            linestyle="None",
-            linewidth=2,
-            color="orange",
-            label="Noise",
-        )
+        if noise_x:
+            pairs = sorted(zip(noise_x, noise_y, noise_vars), key=lambda t: t[0])
+            nx, ny, nvar = zip(*pairs)
+            plt.plot(
+                list(nx),
+                list(ny),
+                marker="x",
+                linestyle="-",
+                linewidth=2,
+                color="orange",
+                label="Noise",
+            )
+            if sweep_label == "positive":
+                nstd = np.sqrt(np.array(nvar))
+                lower = np.clip(np.array(ny) - nstd, 0.0, 1.0)
+                upper = np.clip(np.array(ny) + nstd, 0.0, 1.0)
+                plt.fill_between(list(nx), lower, upper, color="orange", alpha=0.10)
         if stable_noise_x:
             plt.plot(
                 stable_noise_x,
@@ -359,27 +455,40 @@ def plot_combined_summary(
     if summary_disturbance is not None:
         disturbance_x = []
         disturbance_y = []
+        disturbance_vars = []
         stable_disturbance_x = []
         stable_disturbance_y = []
         for param_group, param_data in summary_disturbance.items():
-            for param_name, success_rate in param_data:
-                key = (param_group, param_name)
+            for item in param_data:
+                name = item[0]
+                rate = item[1] if len(item) > 1 else 0.0
+                var = item[2] if len(item) > 2 else 0.0
+                key = (param_group, name)
                 if key in x_map:
                     disturbance_x.append(x_map[key])
-                    disturbance_y.append(success_rate)
+                    disturbance_y.append(rate)
+                    disturbance_vars.append(var)
                     if sweep_label == "all" and key in stable_disturbance:
                         stable_disturbance_x.append(x_map[key])
-                        stable_disturbance_y.append(success_rate)
+                        stable_disturbance_y.append(rate)
 
-        plt.plot(
-            disturbance_x,
-            disturbance_y,
-            marker="s",
-            linestyle="None",
-            linewidth=2,
-            color="green",
-            label="Disturbance",
-        )
+        if disturbance_x:
+            pairs = sorted(zip(disturbance_x, disturbance_y, disturbance_vars), key=lambda t: t[0])
+            dx, dy, dvar = zip(*pairs)
+            plt.plot(
+                list(dx),
+                list(dy),
+                marker="s",
+                linestyle="-",
+                linewidth=2,
+                color="green",
+                label="Disturbance",
+            )
+            if sweep_label == "positive":
+                dstd = np.sqrt(np.array(dvar))
+                lower = np.clip(np.array(dy) - dstd, 0.0, 1.0)
+                upper = np.clip(np.array(dy) + dstd, 0.0, 1.0)
+                plt.fill_between(list(dx), lower, upper, color="green", alpha=0.10)
         if stable_disturbance_x:
             plt.plot(
                 stable_disturbance_x,
@@ -400,6 +509,57 @@ def plot_combined_summary(
     plt.grid(True, linestyle="--", alpha=0.5, axis="y")
     plt.ylim(0, 1.05)
     
+    # Identify parameters with above-average standard deviations (for positive sweep)
+    high_std_params = set()
+    if sweep_label == "positive":
+        param_stds = {}  # (param_group, param_name) -> list of stds
+        
+        # Collect all std values across all 3 scenarios
+        for param_group, param_data in summary_normal.items():
+            for item in param_data:
+                param_name = item[0]
+                var = item[2] if len(item) > 2 else 0.0
+                key = (param_group, param_name)
+                if key not in param_stds:
+                    param_stds[key] = []
+                param_stds[key].append(np.sqrt(var))
+        
+        if summary_noise is not None:
+            for param_group, param_data in summary_noise.items():
+                for item in param_data:
+                    param_name = item[0]
+                    var = item[2] if len(item) > 2 else 0.0
+                    key = (param_group, param_name)
+                    if key not in param_stds:
+                        param_stds[key] = []
+                    param_stds[key].append(np.sqrt(var))
+        
+        if summary_disturbance is not None:
+            for param_group, param_data in summary_disturbance.items():
+                for item in param_data:
+                    param_name = item[0]
+                    var = item[2] if len(item) > 2 else 0.0
+                    key = (param_group, param_name)
+                    if key not in param_stds:
+                        param_stds[key] = []
+                    param_stds[key].append(np.sqrt(var))
+        
+        # Calculate average std per parameter
+        param_avg_stds = {}
+        all_stds_for_avg = []
+        for key, stds in param_stds.items():
+            avg_std = float(np.mean(stds))
+            param_avg_stds[key] = avg_std
+            all_stds_for_avg.extend(stds)
+        
+        # Calculate overall average std
+        overall_avg_std = float(np.mean(all_stds_for_avg)) if all_stds_for_avg else 0.0
+        
+        # Identify parameters with above-average std
+        for key, avg_std in param_avg_stds.items():
+            if avg_std > overall_avg_std:
+                high_std_params.add(key)
+    
     # Color code x-axis labels by param_group
     ax = plt.gca()
     for i, (label, color) in enumerate(zip(param_names, colors)):
@@ -414,6 +574,14 @@ def plot_combined_summary(
                 "facecolor": "lemonchiffon",
                 "edgecolor": "black",
                 "linewidth": 1.2,
+            }
+        elif sweep_label == "positive" and label_key in high_std_params:
+            label_weight = "bold"
+            label_box = {
+                "boxstyle": "round,pad=0.2",
+                "facecolor": "none",
+                "edgecolor": "black",
+                "linewidth": 1.5,
             }
         ax.text(
             i,
@@ -461,6 +629,14 @@ def plot_combined_summary(
                     label="X label: Normal, Noise, and Disturbance all stable",
                 )
             )
+    elif sweep_label == "positive" and high_std_params:
+        dataset_legend.append(
+            Patch(
+                facecolor="none",
+                edgecolor="black",
+                label="X label: Above-average std deviation across all scenarios",
+            )
+        )
     group_legend = [Patch(facecolor=colors_map[pg], label=pg) for pg in summary_normal.keys()]
     dataset_legend_artist = ax.legend(handles=dataset_legend, loc="upper left")
     ax.add_artist(dataset_legend_artist)
