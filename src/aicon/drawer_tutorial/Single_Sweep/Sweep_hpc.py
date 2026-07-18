@@ -15,7 +15,6 @@ DATA_DIR_NORMAL = DATA_DIR / "normal"
 NUM_TRIALS_PER_JOB = 3
 BOUNDARY_EXTENDED_TRIALS = 7
 RANDOM_INIT_TIME = 0.5  # seconds of random movement at start
-RENDER = False
 MAX_TIMESTEPS = 1000
 
 
@@ -66,7 +65,7 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
 
     initial_panda_qpos = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
 
-    env = setup_env(render=RENDER, initial_qpos=initial_panda_qpos)
+    env = setup_env(initial_qpos=initial_panda_qpos)
 
     results = []
 
@@ -95,7 +94,6 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
                 env,
                 estimator_params=job["trial_params"],
                 max_timesteps=MAX_TIMESTEPS,
-                render=RENDER,
                 sweep_label=job["sweep_label"],
                 group_name=job["group_name"],
                 param_name=job["param_name"],
@@ -139,7 +137,6 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
                     env,
                     estimator_params=job["trial_params"],
                     max_timesteps=MAX_TIMESTEPS,
-                    render=RENDER,
                     sweep_label=job["sweep_label"],
                     group_name=job["group_name"],
                     param_name=job["param_name"],

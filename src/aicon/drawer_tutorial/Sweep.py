@@ -2,31 +2,37 @@ import time
 import csv
 import copy
 import random
+import inspect
 from pathlib import Path
 
 import lovely_tensors as lt
 import numpy as np
-import robosuite as suite
 import torch
 from robosuite.utils.transform_utils import quat2mat
-from robosuite.wrappers import VisualizationWrapper
 
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
-from aicon.drawer_tutorial.connections import (
-    # expose DistGraspHandConnection defaults for sweeping
-    # keep these names in sync with the constructor defaults
-    FT_ROTATION,
-    FT_COM,
-    FT_BIAS,
-    EE_MASS,
+from aicon.drawer_tutorial.connections import DistGraspHandConnection
+from aicon.drawer_tutorial.estimators import (
+    DrawerPositionEstimator,
+    EEPoseEstimator,
+    GraspedEstimator,
+    KinematicJointEstimator,
+    VisibleEstimator,
+)
+from aicon.middleware.python_sequential import build_components, run_component_sequence
+from aicon.drawer_tutorial.run_demo import (
+    DEFAULT_INITIAL_PANDA_QPOS,
+    create_demo_visualizers,
+    render_frame,
+    run_trial as run_demo_trial,
+    setup_env as setup_demo_env,
+    update_demo_visualizers,
 )
 
-# Import our custom environment
-from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
-from aicon.middleware.python_sequential import build_components, run_component_sequence
 
-
-DEFAULT_RENDER_SWEEP = False
+DEFAULT_VISUALIZE_KINEMATICS = True
+DEFAULT_VISUALIZE_EE = True
+DEFAULT_VISUALIZE_GRASP_DIAGNOSTICS = True
 # Demo configuration: set mode to either "sweep" or "default_loop"
 # - "sweep": run the parameter sweep (existing behavior)
 # - "default_loop": run the environment repeatedly with default params
@@ -53,120 +59,97 @@ def set_global_seed(seed):
     torch.manual_seed(seed)
 
 
-def setup_env(initial_qpos=None, render=False):
-    # Create our custom environment
-    env = DrawerOpenEnv(
-        robots="Panda",
-        has_renderer=render,
-        has_offscreen_renderer=False,
-        ignore_done=True,
-        use_camera_obs=False,
-        render_camera="agentview",
-        horizon=100,
-        control_freq=30,
-        controller_configs=suite.load_controller_config(default_controller="OSC_POSE"),
-        initial_qpos=initial_qpos,
-    )
-
-    env = VisualizationWrapper(env)
-    env.reset()
+def setup_env(initial_qpos=None):
+    """Use the same renderer, camera, and visualization indicators as ``run_demo``."""
+    env, _ = setup_demo_env("keyboard", initial_qpos=initial_qpos)
     return env
 
 
-def get_default_estimator_params():
+_NON_TUNABLE_INIT_PARAMS = {
+    "self", "name", "connections", "goals", "dtype", "device", "mockbuild",
+    "no_differentiation", "prevent_loops_in_differentiation",
+    "max_length_differentiation_trace",
+}
+
+# These are the parameters intentionally included in the sweep. Their values are
+# read from the constructors, so no numeric defaults are duplicated here.
+_ESTIMATOR_SWEEP_PARAMS = {
+    "ee_pose": (
+        "initial_uncertainty_scale", "action_process_noise", "proprio_update_noise",
+    ),
+    "visible": (
+        "initial_likelihood_prior", "initial_clip_min", "initial_clip_max", "update_gain",
+    ),
+    "grasp_likelihood": (
+        "initial_likelihood", "initially_grasped_likelihood",
+        "baseline_measurement_likelihood", "initial_clip_min", "initial_clip_max",
+        "initial_time_since_hand_change", "gripper_activation_threshold",
+        "close_distance_threshold", "uncertainty_dist_threshold",
+        "hand_change_time_threshold", "force_time_scale", "force_time_max",
+        "low_likelihood_threshold", "negative_innovation_threshold",
+        "negative_innovation_scale",
+    ),
+    "drawer_position": (
+        "depth_prior", "initial_uncertainty_scale", "initial_uncertainty_xy",
+        "initial_uncertainty_depth", "initial_uncertainty_xy_none",
+        "initial_uncertainty_depth_none", "sample_init_mean_likelihood_threshold",
+        "sample_init_mean_distance_threshold",
+        "sample_init_mean_uncertainty_multiplier", "meas_noise_factor",
+        "visual_likelihood_steepness", "R_add_scale", "measurement_nan_reject_scale",
+        "forward_noise_grasped_coeff", "forward_noise_base", "grasped_update_R_scale",
+        "grasped_outlier_rejection_threshold", "measurement_existence_threshold",
+        "grasped_uncertainty_threshold", "missed_absent_measurement_uncertainty_coeff",
+        "hand_change_recovery_time", "tf_lookup_timeout",
+    ),
+    "kinematic_joint": (
+        "initial_azimuth_default", "initial_elevation_default", "grasped_noise",
+        "ungrasped_noise", "axis_azimuth_process_noise",
+        "axis_elevation_process_noise", "joint_process_noise", "anchor_process_noise",
+        "grasp_threshold", "grasp_floor", "outlier_rejection_treshold", "shift_clip_min",
+    ),
+}
+
+
+def _get_constructor_defaults(component_class):
+    """Return the tunable keyword defaults declared by a component constructor."""
     return {
-        "ee_pose": {
-            "initial_uncertainty_scale": 0.001, # Seem to not matter at all
-            "action_process_noise": 0.01, # Seem to not matter so much, just not negative (fail)
-            "proprio_update_noise": 0.01, # Seem to not matter so much, just not negative (fail)
-        },
-        "visible": {
-            "initial_likelihood_prior": 0.01,
-            "initial_clip_min": 0.02,
-            "initial_clip_max": 0.98,
-
-            "update_gain": 0.5,
-        },
-        "grasp_likelihood": {
-            "initial_likelihood": 0.01, # Seem to not matter at all
-            "initially_grasped_likelihood": 0.99,
-            "baseline_measurement_likelihood": 0.05,
-            "initial_clip_min": 0.02,
-            "initial_clip_max": 0.98,
-            "initial_time_since_hand_change": 2.0,
-
-            "gripper_activation_threshold": 0.5,
-            "close_distance_threshold": 0.03,
-            "uncertainty_dist_threshold": 0.25,
-            "hand_change_time_threshold": 1.0,
-            "force_time_scale": 6.0,
-            "force_time_max": 6.0,
-            "low_likelihood_threshold": 0.1,
-            "negative_innovation_threshold": -0.05,
-            "negative_innovation_scale": 0.1,
-        },
-        "drawer_position": { # 22 params
-            "depth_prior": 0.8,# no need
-            "initial_uncertainty_scale": 200, # maybe no
-            "initial_uncertainty_xy": 0.2, # maybe no
-            "initial_uncertainty_depth": 1.0, # maybe no
-            "initial_uncertainty_xy_none": 0.1, # no need
-            "initial_uncertainty_depth_none": 0.3,# no need
-            "sample_init_mean_likelihood_threshold": 0.6, # no need
-            "sample_init_mean_distance_threshold": 0.25, # no need
-            "sample_init_mean_uncertainty_multiplier": 2.0, # no need
-
-            "meas_noise_factor": 0.025,
-            "visual_likelihood_steepness": 5.0,
-            "R_add_scale": 5.0,
-            "measurement_nan_reject_scale": 0.01, # no need
-            "forward_noise_grasped_coeff": 0.15, 
-            "forward_noise_base": 0.005, 
-            "grasped_update_R_scale": 0.03, 
-            "grasped_outlier_rejection_threshold": 0.05, 
-            "measurement_existence_threshold": 0.5,
-            "grasped_uncertainty_threshold": 0.1,
-            "missed_absent_measurement_uncertainty_coeff": 0.1, # Can be grouped to one
-            "hand_change_recovery_time": 0.5,
-            "tf_lookup_timeout": 5.0, # no need
-        },
-        "kinematic_joint": {
-            "initial_azimuth_default": -0.7853981633974483,
-            "initial_elevation_default": -1.5707963267948966,
-
-            "grasped_noise": 0.002, # When value too high, estimation error quite big
-            "ungrasped_noise": 0.001, # Seem to not matter at all
-            "axis_azimuth_process_noise": 0.001, # Does not seem to matter
-            "axis_elevation_process_noise": 0.001, # Does not seem to matter
-            "joint_process_noise": 0.2, # When negative, take a long time and high estimation error, when zero, high estimation error
-            "anchor_process_noise": 1e-6, # Does not seem to matter
-            "grasp_threshold": 0.2, # Does not matter much, just not zero
-            "grasp_floor": 0.2, # When value too high, estimation error quite big
-            "outlier_rejection_treshold": 4.0,
-            "shift_clip_min": 1e-10,
-        },
+        parameter.name: parameter.default
+        for parameter in inspect.signature(component_class.__init__).parameters.values()
+        if parameter.name not in _NON_TUNABLE_INIT_PARAMS
+        and parameter.default is not inspect.Parameter.empty
     }
 
-def get_default_connection_params():
-    # Defaults mirror the hard-coded values in DistGraspHandConnection
-    return {
-        "DistGraspHandConnection": {
-            "dist_decay": 4.0,
-            "close_dist_threshold": 0.03,
-            "ft_noise_offset": 5.0,
-            "low_likelihood_threshold": 0.1,
-            "gripper_activation_threshold": 0.5,
-            "uncertainty_dist_threshold": 0.25,
-            "small_likelihood_value": 1e-8,
 
-            "uncertainty_bias": 0.2,
-            "uncertainty_scale_uncertainty": 5.0,
-            "uncertainty_scale_relevance": 20.0,
-            "dist_sigmoid_scale": 5.0,
-            "time_since_hand_change_threshold": 1.0,
-            "ft_tresh_multiplier": 6.0,
-            "ft_tresh_cap": 6.0,
-        }
+def _get_selected_constructor_defaults(component_class, parameter_names):
+    defaults = _get_constructor_defaults(component_class)
+    return {parameter_name: defaults[parameter_name] for parameter_name in parameter_names}
+
+
+def get_default_estimator_params():
+    """Get estimator defaults from the constructors used by the experiment builder."""
+    return {
+        "ee_pose": _get_selected_constructor_defaults(
+            EEPoseEstimator, _ESTIMATOR_SWEEP_PARAMS["ee_pose"]
+        ),
+        "visible": _get_selected_constructor_defaults(
+            VisibleEstimator, _ESTIMATOR_SWEEP_PARAMS["visible"]
+        ),
+        "grasp_likelihood": _get_selected_constructor_defaults(
+            GraspedEstimator, _ESTIMATOR_SWEEP_PARAMS["grasp_likelihood"]
+        ),
+        "drawer_position": _get_selected_constructor_defaults(
+            DrawerPositionEstimator, _ESTIMATOR_SWEEP_PARAMS["drawer_position"]
+        ),
+        "kinematic_joint": _get_selected_constructor_defaults(
+            KinematicJointEstimator, _ESTIMATOR_SWEEP_PARAMS["kinematic_joint"]
+        ),
+    }
+
+
+def get_default_connection_params():
+    """Get connection defaults from the constructors used by the experiment builder."""
+    return {
+        "DistGraspHandConnection": _get_constructor_defaults(DistGraspHandConnection),
     }
 
 def get_sweep_values(standard_value):
@@ -218,83 +201,31 @@ def filter_single_parameter_sweeps(sweep_jobs, group_name, param_name):
     return [job for job in sweep_jobs if job["group_name"] == group_name and job["param_name"] == param_name]
 
 
-def run_trial(env, estimator_params, max_timesteps=None, render=False, sweep_label="", group_name="", 
-              param_name="", sweep_value=None, stop_on_done=True, reset_on_start=True, random_init_time=0.0, 
-              random_std=0.1, disturbance=None, noise_scale=0.0):
-    if reset_on_start:
-        env.reset()
-
-    # support optional connection-level overrides in estimator params dict under key "connection_params"
-    estimator_params = copy.deepcopy(estimator_params) if isinstance(estimator_params, dict) else estimator_params
-    connection_params = estimator_params.pop("connection_params", None) if isinstance(estimator_params, dict) else None
-
-    component_building_functions, _, _ = get_building_functions_basic_drawer_motion(
-        env, estimator_params=estimator_params, connection_params=connection_params, noise_scale=noise_scale
+def run_trial(env, estimator_params, max_timesteps=None, sweep_label="", group_name="",
+              param_name="", sweep_value=None, stop_on_done=True, reset_on_start=True,
+              random_init_time=0.0, random_std=0.1, disturbance=None, noise_scale=0.0,
+              visualize_kinematic_angles=DEFAULT_VISUALIZE_KINEMATICS,
+              visualize_ee=DEFAULT_VISUALIZE_EE,
+              visualize_grasp_diagnostics=DEFAULT_VISUALIZE_GRASP_DIAGNOSTICS):
+    """Sweep-compatible adapter around the shared demo trial runner."""
+    status_label = f"{group_name}.{param_name}={sweep_label}:{sweep_value}"
+    return run_demo_trial(
+        env,
+        estimator_params=estimator_params,
+        max_timesteps=max_timesteps,
+        stop_on_done=stop_on_done,
+        reset_on_start=reset_on_start,
+        random_init_time=random_init_time,
+        random_std=random_std,
+        random_disturbance=disturbance,
+        noise_scale=noise_scale,
+        visualize_kinematic_angles=visualize_kinematic_angles,
+        visualize_ee=visualize_ee,
+        visualize_grasp_diagnostics=visualize_grasp_diagnostics,
+        # Sweep historically creates its diagnostic plots independently of MuJoCo rendering.
+        render=True,
+        status_label=status_label,
     )
-    components = build_components(component_building_functions)
-    gripper_component = components["GripperAction"]
-    gripper_velo = components["EEVelocities"]
-    kinematic_estimator = components["KinematicJointEstimator"]
-    grasp_estimator = components["GraspLikelihoodEstimator"]
-
-    curr_t = 0.0
-    stop_joint_error = float("nan")
-    stop_grasp_estimate = float("nan")
-    stop_actual_grasped = False
-    step_idx = 1
-    # If max_timesteps is provided, limit the loop; otherwise run until env signals done.
-    # Reuse NumPy's global RNG seeded by set_global_seed() instead of creating a new default_rng()
-    rng = np.random
-    while True:
-        run_component_sequence(components, torch.tensor(curr_t))
-        curr_commanded_vel = gripper_velo.quantities["action_velo_ee"]
-        curr_commanded_gripper = gripper_component.quantities["gripper_activation"]
-
-        action = np.concatenate(
-            [curr_commanded_vel.cpu().numpy(), np.zeros(3), [2 * curr_commanded_gripper.squeeze().cpu().numpy() - 1]]
-        )
-
-        # If t < random_init_time, override action with random values for exploration at the start of the episode
-        if curr_t < random_init_time:
-            action = np.concatenate([
-                rng.uniform(-random_std, random_std, size=3),  # random EE velocity
-                np.zeros(3),                       # no rotation
-                [0]              # don't activate gripper during random init
-            ])
-        # Make 10% of the time, apply a random disturbance to translation part of the action
-        if disturbance is not None and rng.rand() < 0.1:
-            action[:3] += rng.uniform(-disturbance, disturbance, size=3)
-        _, rew, done, _ = env.step(action)
-        base_env = env.env if hasattr(env, "env") else env
-        true_joint_state = float(base_env.sim.data.qpos[base_env.cabinet_qpos_addrs])
-        estimated_joint_state = float(kinematic_estimator.quantities["kinematic_joint"][2].item())
-        grasp_estimate = float(grasp_estimator.quantities["likelihood_grasped_drawer"].item())
-        obs = env._get_observations()
-        actual_grasped = bool(np.asarray(obs.get("robot0_contact", base_env._has_gripper_contact)).item())
-        stop_joint_error = estimated_joint_state - true_joint_state
-        stop_grasp_estimate = grasp_estimate
-        stop_actual_grasped = actual_grasped
-        # display timestep info; show max if provided
-        max_display = str(max_timesteps) if max_timesteps is not None else "inf"
-        print(
-            f"  [{group_name}.{param_name}={sweep_label}:{sweep_value}] "
-            f"step {step_idx:04d}/{max_display}: "
-            f"est={estimated_joint_state:.6f}, true={true_joint_state:.6f}, err={stop_joint_error:+.6f}, "
-            f"grasp_est={grasp_estimate:.6f}, grasped={actual_grasped}",
-            flush=True,
-        )
-
-        if (done or rew == 1.0) and stop_on_done:
-            return True, step_idx, stop_joint_error, stop_grasp_estimate, stop_actual_grasped
-
-        curr_t += env.control_timestep
-        if render:
-            env.render()
-
-        # increment and check loop limit
-        step_idx += 1
-        if (max_timesteps is not None) and (step_idx > max_timesteps):
-            return False, max_timesteps, stop_joint_error, stop_grasp_estimate, stop_actual_grasped
 
 
 def save_sweep_results(records, save_path):
@@ -339,7 +270,10 @@ def save_sweep_summary(summary, save_path):
         writer.writerows(summary)
 
 
-def main(env, max_timesteps_per_trial=500, render=False, rec_save_path=None):
+def main(env, max_timesteps_per_trial=500, rec_save_path=None,
+         visualize_kinematic_angles=DEFAULT_VISUALIZE_KINEMATICS,
+         visualize_ee=DEFAULT_VISUALIZE_EE,
+         visualize_grasp_diagnostics=DEFAULT_VISUALIZE_GRASP_DIAGNOSTICS):
     env.reset()
 
     # Print debug information about the drawer
@@ -348,12 +282,6 @@ def main(env, max_timesteps_per_trial=500, render=False, rec_save_path=None):
     # Get the observation using the original method
     env_obs = env._get_observations()
 
-    # Access cabinet information in the same way as the original environment
-    cabinet_position = env_obs["CabinetObject_pos"]
-    cabinet_orientation = quat2mat(env_obs["CabinetObject_quat"])
-
-    print(f"\nCabinet position from obs: {cabinet_position}")
-    print(f"Cabinet orientation matrix from obs:\n{cabinet_orientation}")
 
     base_params = get_default_estimator_params()
     base_conn_params = get_default_connection_params()
@@ -416,11 +344,13 @@ def main(env, max_timesteps_per_trial=500, render=False, rec_save_path=None):
                     env,
                     estimator_params=job["trial_params"],
                     max_timesteps=max_timesteps_per_trial,
-                    render=render,
                     sweep_label=sweep_label,
                     group_name=group_name,
                     param_name=param_name,
                     sweep_value=sweep_value,
+                    visualize_kinematic_angles=visualize_kinematic_angles,
+                    visualize_ee=visualize_ee,
+                    visualize_grasp_diagnostics=visualize_grasp_diagnostics,
                 )
             except Exception as exc:
                 error_text = str(exc)
@@ -495,58 +425,8 @@ def main(env, max_timesteps_per_trial=500, render=False, rec_save_path=None):
     print(f"Results saved to: {rec_save_path}")
     print(f"Summary saved to: {summary_save_path}")
 
-def run_demo(render=DEFAULT_RENDER_SWEEP, max_timesteps_per_trial=500):
-    set_global_seed(DEMO_SEED)
-    # Define the desired initial joint positions for the Panda robot (7 joints)
-    initial_panda_qpos = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
-    # initial_panda_qpos = None
-
-    # Pass the initial pose to the setup function
-    env = setup_env(initial_qpos=initial_panda_qpos, render=render)
-    main(env, max_timesteps_per_trial=max_timesteps_per_trial, render=render)
-
-
-def run_default_loop(env, base_params, max_timesteps_per_trial=500, render=False, delay=DEFAULT_LOOP_DELAY):
-    """Run trials repeatedly using the default estimator/connection params until interrupted."""
-    trial = 0
-    try:
-        while True:
-            if DEMO_SEED is not None and RESEED_EACH_TRIAL:
-                set_global_seed(DEMO_SEED)
-            trial += 1
-            print(f"Default loop trial {trial}")
-            try:
-                success, timesteps, stop_joint_error, stop_grasp_estimate, stop_actual_grasped = run_trial(
-                    env,
-                    estimator_params=copy.deepcopy(base_params),
-                    max_timesteps=None,
-                    render=render,
-                    sweep_label="default",
-                    group_name="default",
-                    param_name="default",
-                    sweep_value=None,
-                    stop_on_done=False,
-                    reset_on_start=False,
-                )
-                print(f"Trial {trial}: success={success}, timesteps={timesteps}, err={stop_joint_error}")
-            except Exception as exc:
-                print(f"Trial {trial} failed with error: {exc}")
-
-            # small pause between trials
-            time.sleep(delay)
-    except KeyboardInterrupt:
-        print("Default loop interrupted by user. Exiting.")
-
 
 if __name__ == "__main__":
     set_global_seed(DEMO_SEED)
-    # initial joint positions for Panda
-    initial_panda_qpos = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
-    env = setup_env(initial_qpos=initial_panda_qpos, render=DEFAULT_RENDER_SWEEP)
-
-    if DEMO_MODE == "default_loop":
-        base_params = get_default_estimator_params()
-        run_default_loop(env, base_params, max_timesteps_per_trial=500, render=DEFAULT_RENDER_SWEEP)
-    else:
-        # default: run sweep
-        main(env, max_timesteps_per_trial=500, render=DEFAULT_RENDER_SWEEP)
+    env = setup_env(initial_qpos=DEFAULT_INITIAL_PANDA_QPOS)
+    main(env, max_timesteps_per_trial=500)

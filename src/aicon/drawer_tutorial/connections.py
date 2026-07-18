@@ -19,7 +19,7 @@ from loguru import logger
 GRASPING_ORIENTATION_DRAWER = [[-0.19754394844475631210, -0.01502825724660820927, 0.98017882977298076419],
                 [-0.20747924073575563231, -0.97658970333946726328, -0.05678832084272268654],
                 [ 0.95808598336199168877, -0.21458494869060928956, 0.18980133616634375926,]]
-RELATIVE_PREGRASPING_POINT_DRAWER = [0.005,-0.005, 0.0]
+RELATIVE_PREGRASPING_POINT_DRAWER = [0.0,0.0, 0.0]
 RELATIVE_GRASPED_POINT_DRAWER = [0.0, 0.0, 0.0] #[0.005, -0.005, 0.155]
 GRAVITY_ACC = 9.8067
 FT_COM = [-0.001054, -0.016209, 0.090570] #[-0.022491, -0.006024, 0.076837]
@@ -119,9 +119,8 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             ft_noise_offset: float = 5.0,
             low_likelihood_threshold: float = 0.1,
             gripper_activation_threshold: float = 0.5,
-            uncertainty_dist_threshold: float = 0.25,
+            uncertainty_dist_threshold: float = 0.4,
             small_likelihood_value: float = 1e-8,
-            # additional tunable constants that were previously hard-coded
             uncertainty_bias: float = 0.2,
             uncertainty_scale_uncertainty: float = 5.0,
             uncertainty_scale_relevance: float = 20.0,
@@ -171,9 +170,9 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             innovation_from_dist = likelihood_given_dist - likelihood_given_uncertainty.detach()
 
             force_magnitude = torch.norm(ee_force_mag_meas)
-            print(
-                f"Distance EE-Drawer: {distance_ee_drawer[0].item()}, Uncertainty: {uncertainty_dist.item(),}, Force magnitude: {force_magnitude.item()}"
-            )
+            # print(
+            #     f"Distance EE-Drawer: {distance_ee_drawer[0].item()}, Uncertainty: {uncertainty_dist.item(),}, Force magnitude: {force_magnitude.item()}"
+            # )
             # hand and force measurements are only relevant if we are close (otherwise from other source...)
             if (
                 (distance_ee_drawer[0] < self.close_dist_threshold

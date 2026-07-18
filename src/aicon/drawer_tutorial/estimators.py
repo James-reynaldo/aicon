@@ -140,7 +140,10 @@ class DrawerPositionEstimator(EstimationComponent):
                  forward_noise_grasped_coeff : float = 0.15,
                  forward_noise_base : float = 0.005,
                  grasped_update_R_scale : float = 0.03,
-                 grasped_outlier_rejection_threshold : float = 0.05,
+                 grasped_outlier_rejection_threshold: Union[float, None] = None,
+                 rigid_grasp_force_threshold: float = 10.0,
+                 rigid_grasp_force_scale: float = 10.0,
+                 rigid_grasp_update_gain: float = 0.35,
                  measurement_existence_threshold : float = 0.5,
                  grasped_uncertainty_threshold : float = 0.1,
                  missed_absent_measurement_uncertainty_coeff : float = 0.1,
@@ -624,14 +627,16 @@ class GraspedEstimator(EstimationComponent):
             else:
                 time_since_hand_change_new[0] = time_since_hand_change[0] + dt
                 time_since_hand_change_new[1] = 0.0
-            force_magnitude = torch.norm(ee_force_mag_meas)
-            if (distance_ee_drawer[0] < self.close_distance_threshold and uncertainty_dist < self.uncertainty_dist_threshold and time_since_hand_change[0] > self.hand_change_time_threshold) or (gripper_activation > self.gripper_activation_threshold):
-                FT_tresh = torch.minimum(time_since_hand_change[1] * self.force_time_scale, torch.ones_like(time_since_hand_change[1]) * self.force_time_max)
-                print("FT_tresh:", FT_tresh.item())
-                likelihood_from_hand_and_force = torch.clip(1 - torch.exp(-(force_magnitude - FT_tresh)), 0, 1) * gripper_activation
-                if (likelihood_grasped_drawer < self.low_likelihood_threshold) and (likelihood_from_hand_and_force < self.low_likelihood_threshold) and (gripper_activation > self.gripper_activation_threshold):
-                    likelihood_from_hand_and_force = (likelihood_from_hand_and_force.detach() -
-                                                   gripper_activation + gripper_activation.detach())
+            #Dead Code
+            # force_magnitude = torch.norm(ee_force_mag_meas)
+            # if (distance_ee_drawer[0] < self.close_distance_threshold and uncertainty_dist < self.uncertainty_dist_threshold and time_since_hand_change[0] > self.hand_change_time_threshold) or (gripper_activation > self.gripper_activation_threshold):
+            #     FT_tresh = torch.minimum(time_since_hand_change[1] * self.force_time_scale, torch.ones_like(time_since_hand_change[1]) * self.force_time_max)
+            #     print("FT_tresh:", FT_tresh.item())
+            #     likelihood_from_hand_and_force = torch.clip(1 - torch.exp(-(force_magnitude - FT_tresh)), 0, 1) * gripper_activation
+            #     if (likelihood_grasped_drawer < self.low_likelihood_threshold) and (likelihood_from_hand_and_force < self.low_likelihood_threshold) and (gripper_activation > self.gripper_activation_threshold):
+            #         likelihood_from_hand_and_force = (likelihood_from_hand_and_force.detach() -
+            #                                        gripper_activation + gripper_activation.detach())
+            #Dead Code
             innovation = c_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, gripper_activation, ee_force_mag_meas, time_since_hand_change_new)
             if innovation < self.negative_innovation_threshold:
                 new_likelihood = likelihood_grasped_drawer + self.negative_innovation_scale * innovation   # slowly decide that it isnt grasped anymore
@@ -784,7 +789,7 @@ class KinematicJointEstimator(EstimationComponent):
                  ungrasped_noise: float = 0.001,
                  axis_azimuth_process_noise: float = 0.001,
                  axis_elevation_process_noise: float = 0.001,
-                 joint_process_noise: float = 0.2,
+                 joint_process_noise: float = 0.001,
                  anchor_process_noise: float = 1e-6,
                  grasp_threshold: float = 0.5,
                  grasp_floor: float = 0.000000000001,
@@ -914,7 +919,6 @@ class KinematicJointEstimator(EstimationComponent):
             mu_new, Sigma_new = update_shifting_ekf(c_func, mu_new, Sigma_new, position_drawer, uncertainty_drawer, R_additive, shift_diagonal_matrix, outlier_rejection_treshold= outlier_rejection_treshold)
             Sigma_new = torch.cat([torch.cat([Sigma_new[:3, :3], torch.zeros_like(Sigma_new[:3, :3])], dim=0),
                                           torch.cat([torch.zeros_like(Sigma_new[3:, 3:]), Sigma_new[3:, 3:]], dim=0)], dim=1)
-            print(f"[kinematic_joint] mu_new: {mu_new}, Sigma_new: {Sigma_new.diag()} uncertainty drawer: {torch.diag(uncertainty_drawer)}")
             return (mu_new, Sigma_new), (mu_new, Sigma_new)
 
         return f_func, ["kinematic_joint", "uncertainty_joint"], ["kinematic_joint", "uncertainty_joint"]
