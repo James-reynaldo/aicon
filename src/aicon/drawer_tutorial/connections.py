@@ -119,7 +119,7 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             ft_noise_offset: float = 5.0,
             low_likelihood_threshold: float = 0.1,
             gripper_activation_threshold: float = 0.5,
-            uncertainty_dist_threshold: float = 0.25,
+            uncertainty_dist_threshold: float = 0.4,
             small_likelihood_value: float = 1e-8,
             uncertainty_bias: float = 0.2,
             uncertainty_scale_uncertainty: float = 3.0,

@@ -81,31 +81,54 @@ _ESTIMATOR_SWEEP_PARAMS = {
         "initial_likelihood_prior", "initial_clip_min", "initial_clip_max", "update_gain",
     ),
     "grasp_likelihood": (
-        "initial_likelihood", "initially_grasped_likelihood",
-        "baseline_measurement_likelihood", "initial_clip_min", "initial_clip_max",
-        "initial_time_since_hand_change", "gripper_activation_threshold",
-        "close_distance_threshold", "uncertainty_dist_threshold",
-        "hand_change_time_threshold", "force_time_scale", "force_time_max",
-        "low_likelihood_threshold", "negative_innovation_threshold",
+        # "initial_likelihood", 
+        # "initially_grasped_likelihood",
+
+        "baseline_measurement_likelihood", 
+        "initial_clip_min", 
+        "initial_clip_max",
+        "initial_time_since_hand_change", 
+
+        # "gripper_activation_threshold",
+        # "close_distance_threshold", 
+        # "uncertainty_dist_threshold",
+        # "hand_change_time_threshold", 
+        # "force_time_scale", 
+        # "force_time_max",
+        # "low_likelihood_threshold", 
+        
+        "negative_innovation_threshold",
         "negative_innovation_scale",
     ),
     "drawer_position": (
-        "depth_prior", "initial_uncertainty_scale", "initial_uncertainty_xy",
+        # "depth_prior", 
+        
+        "initial_uncertainty_scale", "initial_uncertainty_xy",
         "initial_uncertainty_depth", "initial_uncertainty_xy_none",
-        "initial_uncertainty_depth_none", "sample_init_mean_likelihood_threshold",
-        "sample_init_mean_distance_threshold",
-        "sample_init_mean_uncertainty_multiplier", "meas_noise_factor",
+        "initial_uncertainty_depth_none", 
+        
+        # "sample_init_mean_likelihood_threshold",
+        # "sample_init_mean_distance_threshold",
+        # "sample_init_mean_uncertainty_multiplier", 
+        
+        "meas_noise_factor",
         "visual_likelihood_steepness", "R_add_scale", "measurement_nan_reject_scale",
         "forward_noise_grasped_coeff", "forward_noise_base", "grasped_update_R_scale",
         "grasped_outlier_rejection_threshold", "measurement_existence_threshold",
         "grasped_uncertainty_threshold", "missed_absent_measurement_uncertainty_coeff",
-        "hand_change_recovery_time", "tf_lookup_timeout",
+        "hand_change_recovery_time", 
+        
+        # "tf_lookup_timeout",
     ),
     "kinematic_joint": (
-        "initial_azimuth_default", "initial_elevation_default", "grasped_noise",
+        # "initial_azimuth_default", 
+        # "initial_elevation_default", 
+        
+        "grasped_noise",
         "ungrasped_noise", "axis_azimuth_process_noise",
         "axis_elevation_process_noise", "joint_process_noise", "anchor_process_noise",
-        "grasp_threshold", "grasp_floor", "outlier_rejection_treshold", "shift_clip_min",
+        "grasp_threshold", "grasp_floor", "outlier_rejection_treshold", 
+        # "shift_clip_min",
     ),
 }
 
@@ -157,8 +180,10 @@ def get_sweep_values(standard_value):
         ("negative", -standard_value),
         ("zero", 0.0),
         ("x0.001", 0.001 * standard_value),
+        ("x0.2", 0.2 * standard_value),
         ("x0.5", 0.5 * standard_value),
         ("x2", 2.0 * standard_value),
+        ("x5", 5.0 * standard_value),
         ("x1000", 1000.0 * standard_value),
     ]
 
@@ -183,6 +208,7 @@ def get_standard_job(base_params):
 def generate_single_parameter_sweeps(base_params):
     for group_name in sorted(base_params.keys()):
         for param_name in sorted(base_params[group_name].keys()):
+            print(f"Generating sweep for {group_name}.{param_name}")
             standard_value = base_params[group_name][param_name]
             for sweep_label, sweep_value in get_sweep_values(standard_value):
                 trial_params = copy.deepcopy(base_params)
@@ -211,6 +237,7 @@ def run_trial(env, estimator_params, max_timesteps=None, sweep_label="", group_n
     status_label = f"{group_name}.{param_name}={sweep_label}:{sweep_value}"
     return run_demo_trial(
         env,
+        device=None,
         estimator_params=estimator_params,
         max_timesteps=max_timesteps,
         stop_on_done=stop_on_done,
@@ -223,7 +250,6 @@ def run_trial(env, estimator_params, max_timesteps=None, sweep_label="", group_n
         visualize_ee=visualize_ee,
         visualize_grasp_diagnostics=visualize_grasp_diagnostics,
         # Sweep historically creates its diagnostic plots independently of MuJoCo rendering.
-        render=True,
         status_label=status_label,
     )
 

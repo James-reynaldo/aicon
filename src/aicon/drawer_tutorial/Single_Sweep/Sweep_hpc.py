@@ -12,10 +12,27 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR_DISTURBANCE = DATA_DIR / "disturbance"
 DATA_DIR_NOISE = DATA_DIR / "noise"
 DATA_DIR_NORMAL = DATA_DIR / "normal"
-NUM_TRIALS_PER_JOB = 3
+NUM_TRIALS_PER_JOB = 1
 BOUNDARY_EXTENDED_TRIALS = 7
-RANDOM_INIT_TIME = 0.5  # seconds of random movement at start
+RANDOM_INIT_TIME = 0  # seconds of random movement at start
 MAX_TIMESTEPS = 1000
+
+Visible_Initial_qpos_list = [
+    np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]), #visible
+    np.array([-0.57252049,  0.47811905,  0.10284968, -2.0172723,   1.15352072,  1.42225441,  -0.17381949]), #visible
+    np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]), #visible
+    np.array([-0.55045225,  0.45672133,  0.18660044, -2.06409333,  1.23236357,  1.52805897,  -0.16151129]), #visible
+    np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]) #visible
+]
+
+
+Invisible_Initial_qpos_list = [
+np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32]),
+np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]), # invisible
+np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]), # invisible at first
+np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]), # invisible
+np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]) # invisible
+]
 
 
 # reuse your existing functions (copy them from current file)
@@ -48,9 +65,9 @@ def get_all_jobs():
         job["trial_params"] = trial_est_params
 
     standard_job = get_standard_job(base_params)
-    standard_job["trial_params"]["connection_params"] = copy.deepcopy(base_conn_params)
+    # standard_job["trial_params"]["connection_params"] = copy.deepcopy(base_conn_params)
 
-    return jobs_est + jobs_conn
+    return jobs_est + jobs_conn + [standard_job]
 
 
 def main(job_index: int, disturbance: float = None, noise_scale: float = None):
@@ -62,10 +79,6 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
     job = jobs[job_index]
 
     print(f"[HPC] Running job {job_index}: {job['group_name']} {job['param_name']} {job['sweep_label']}")
-
-    initial_panda_qpos = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
-
-    env = setup_env(initial_qpos=initial_panda_qpos)
 
     results = []
 
@@ -89,8 +102,13 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
 
     try:
         for run in range(NUM_TRIALS_PER_JOB):
+            if run < len(Visible_Initial_qpos_list):
+                initial_panda_qpos = Visible_Initial_qpos_list[run]
+            else:
+                initial_panda_qpos = Invisible_Initial_qpos_list[run - len(Visible_Initial_qpos_list)]
+            env = setup_env(initial_qpos=initial_panda_qpos)
             set_global_seed(run)  # set seed for reproducibility
-            success, timesteps, err, grasp, grasped = run_trial(
+            success, timesteps, err, grasp, kinematic_axis_error, anchor_error = run_trial(
                 env,
                 estimator_params=job["trial_params"],
                 max_timesteps=MAX_TIMESTEPS,
@@ -110,6 +128,9 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
                 seed=run,
                 timesteps=timesteps,
                 error=err,
+                grasp=grasp,
+                kinematic_axis_error=kinematic_axis_error,
+                anchor_error=anchor_error,
                 metadata=job_metadata,
             )
 
@@ -121,51 +142,55 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
                 success,
                 timesteps,
                 err,
+                kinematic_axis_error,
+                anchor_error
             ))
 
             print(f"run {run}: success={success}, steps={timesteps}, err={err}")
 
-        initial_successes = sum(1 for result in results if result[4])
-        if initial_successes in {1, 2}:
-            print(
-                f"Boundary success rate detected ({initial_successes}/{NUM_TRIALS_PER_JOB}), "
-                f"running {BOUNDARY_EXTENDED_TRIALS} more trials to total 10 runs."
-            )
-            for run in range(NUM_TRIALS_PER_JOB, NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS):
-                set_global_seed(run)
-                success, timesteps, err, grasp, grasped = run_trial(
-                    env,
-                    estimator_params=job["trial_params"],
-                    max_timesteps=MAX_TIMESTEPS,
-                    sweep_label=job["sweep_label"],
-                    group_name=job["group_name"],
-                    param_name=job["param_name"],
-                    sweep_value=job["sweep_value"],
-                    random_init_time=RANDOM_INIT_TIME,
-                    random_std=1,
-                    disturbance=disturbance,
-                    noise_scale=noise_scale
-                )
+        # initial_successes = sum(1 for result in results if result[4])
+        # if initial_successes in {1, 2}:
+        #     print(
+        #         f"Boundary success rate detected ({initial_successes}/{NUM_TRIALS_PER_JOB}), "
+        #         f"running {BOUNDARY_EXTENDED_TRIALS} more trials to total 10 runs."
+        #     )
+        #     for run in range(NUM_TRIALS_PER_JOB, NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS):
+        #         set_global_seed(run)
+        #         success, timesteps, err, grasp, grasped = run_trial(
+        #             env,
+        #             estimator_params=job["trial_params"],
+        #             max_timesteps=MAX_TIMESTEPS,
+        #             sweep_label=job["sweep_label"],
+        #             group_name=job["group_name"],
+        #             param_name=job["param_name"],
+        #             sweep_value=job["sweep_value"],
+        #             random_init_time=RANDOM_INIT_TIME,
+        #             random_std=1,
+        #             disturbance=disturbance,
+        #             noise_scale=noise_scale
+        #         )
 
-                store.add_trial(
-                    params=job["trial_params"],
-                    success=success,
-                    seed=run,
-                    timesteps=timesteps,
-                    error=err,
-                    metadata=job_metadata,
-                )
+        #         store.add_trial(
+        #             params=job["trial_params"],
+        #             success=success,
+        #             seed=run,
+        #             timesteps=timesteps,
+        #             error=err,
+        #             metadata=job_metadata,
+        #         )
 
-                results.append((
-                    job["group_name"],
-                    job["param_name"],
-                    job["sweep_label"],
-                    job["sweep_value"],
-                    success,
-                    timesteps,
-                    err,
-                ))
-                print(f"run {run}: success={success}, steps={timesteps}, err={err}")
+        #         results.append((
+        #             job["group_name"],
+        #             job["param_name"],
+        #             job["sweep_label"],
+        #             job["sweep_value"],
+        #             success,
+        #             timesteps,
+        #             err,
+        #             kinematic_axis_error,
+        #             anchor_error
+        #         ))
+        #         print(f"run {run}: success={success}, steps={timesteps}, err={err}")
     finally:
         try:
             env.close()

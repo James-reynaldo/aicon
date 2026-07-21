@@ -11,11 +11,10 @@ import torch
 
 from robosuite.utils.transform_utils import quat2mat
 from robosuite.wrappers import VisualizationWrapper
-from experiment_specifications import OPEN_VALUE
 
-from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
+from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion, OPEN_VALUE
 
-RENDER = True  # Set to True to visualize the environment
+RENDER = False  # Set to True to visualize the environment
 
 if RENDER:
     from robosuite.devices import Keyboard, SpaceMouse
@@ -27,7 +26,7 @@ def render_frame(env, timestamp):
         env.render()
 # Disturbance configuration for periodic jerks
 DISTURBANCE_INTERVAL = 1.0
-DISTURBANCE_MAGNITUDE = 0
+DISTURBANCE_MAGNITUDE = 0.0
 
 # Import our custom environment
 from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
@@ -44,16 +43,16 @@ DRAWER_POSITION_INDICATOR = "drawer_position"
 
 # Visible
 # DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]) #visible
-DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.57252049,  0.47811905,  0.10284968, -2.0172723,   1.15352072,  1.42225441,  -0.17381949]) #visible
+# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.57252049,  0.47811905,  0.10284968, -2.0172723,   1.15352072,  1.42225441,  -0.17381949]) #visible
 DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]) #visible
-DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.54045225,  0.45672133,  0.18660044, -2.06409333,  1.23236357,  1.52805897,  -0.16151129]) #visible
-DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]) #visible
+# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.54045225,  0.45672133,  0.18660044, -2.06409333,  1.23236357,  1.52805897,  -0.16151129]) #visible
+# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]) #visible
 
 # Invisible
 # DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
 # DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]) # invisible
 # DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]) # invisible at first
-DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]) # invisible
+# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]) # invisible
 # DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]) # invisible
 
 class GraspDiagnosticsPlotter:
@@ -457,10 +456,10 @@ def create_demo_visualizers(env, components, visualize_kinematic_angles=True,
         "joint": KinematicJointVisualizer(env) if visualize_kinematic_angles else None,
         # "joint_angles": KinematicJointAnglePlotter(env) if visualize_kinematic_angles else None,
         # "ee": EEPosVisualizer(env) if visualize_ee else None,
-        "grasp": (
-            GraspDiagnosticsPlotter(grasp_estimator.connections["GraspedLikelihood"])
-            if visualize_grasp_diagnostics else None
-        ),
+        # "grasp": (
+        #     GraspDiagnosticsPlotter(grasp_estimator.connections["GraspedLikelihood"])
+        #     if visualize_grasp_diagnostics else None
+        # ),
         "drawer_position": DrawerPositionVisualizer(env) if visualize_drawer_position else None,
         "gradient_trace": GradientTracePlotter(components["EEVelocities"]) if visualize_gradient_trace else None,
     }
@@ -497,19 +496,19 @@ def update_demo_visualizers(visualizers, components, simulation_time, drawer_ori
     if gradient_plotter is not None:
         gradient_plotter.update(simulation_time)
 
-    grasp_plotter = visualizers["grasp"]
-    if grasp_plotter is not None:
-        grasp_plotter.update(
-            simulation_time,
-            components["EEForceSensor"].quantities["ee_force_mag_meas"],
-            components["DistanceEstimator"].quantities["distance_ee_drawer"][0],
-            components["DistanceEstimator"].quantities["uncertainty_dist"],
-            components["GripperAction"].quantities["gripper_activation"],
-            components["GraspLikelihoodEstimator"].quantities["time_since_hand_change"],
-            components["GraspLikelihoodEstimator"].quantities["likelihood_grasped_drawer"],
-            components["VisibleEstimator"].quantities["likelihood_visible_drawer"],
-            components["DrawerPosEstimator"].quantities["uncertainty_drawer"]
-        )
+    # grasp_plotter = visualizers["grasp"]
+    # if grasp_plotter is not None:
+    #     grasp_plotter.update(
+    #         simulation_time,
+    #         components["EEForceSensor"].quantities["ee_force_mag_meas"],
+    #         components["DistanceEstimator"].quantities["distance_ee_drawer"][0],
+    #         components["DistanceEstimator"].quantities["uncertainty_dist"],
+    #         components["GripperAction"].quantities["gripper_activation"],
+    #         components["GraspLikelihoodEstimator"].quantities["time_since_hand_change"],
+    #         components["GraspLikelihoodEstimator"].quantities["likelihood_grasped_drawer"],
+    #         components["VisibleEstimator"].quantities["likelihood_visible_drawer"],
+    #         components["DrawerPosEstimator"].quantities["uncertainty_drawer"]
+        # )
 
 def setup_env(device_type, initial_qpos=None):
     if RENDER:
@@ -521,7 +520,7 @@ def setup_env(device_type, initial_qpos=None):
         has_offscreen_renderer=True,
         ignore_done=True,
         use_camera_obs=False,
-        render_camera="frontview", #'frontview', 'birdview', 'agentview', 'sideview', 'robot0_robotview', 'robot0_eye_in_hand'
+        render_camera="agentview", #'frontview', 'birdview', 'agentview', 'sideview', 'robot0_robotview', 'robot0_eye_in_hand'
         horizon=100,
         control_freq=30,
         controller_configs=suite.load_controller_config(default_controller="OSC_POSE"),
@@ -580,6 +579,9 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
     curr_t, step_idx = 0.0, 1
     joint_error = grasp_estimate = float("nan")
     actual_grasped = False
+    done_wait_steps = 0
+    base_env = env.env if hasattr(env, "env") else env
+    initial_drawer_handle_pos = np.asarray(base_env.get_drawer_handle_pos(), dtype=np.float64).reshape(-1)
     while True:
         run_component_sequence(components, torch.tensor(curr_t))
         velocity = velocities.quantities["action_velo_ee"].cpu().numpy()
@@ -588,7 +590,12 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
         if curr_t < random_init_time:
             action = np.concatenate([np.random.uniform(-random_std, random_std, 3), np.zeros(3), [0]])
         if random_disturbance is not None and np.random.rand() < 0.1:
-            action[:3] += np.random.uniform(-random_disturbance, random_disturbance, 3)
+            if float(gripper_action) > 0.5:
+                disturbance = np.zeros(3)
+                disturbance[1] = abs(np.random.uniform(0.0, random_disturbance))
+            else:
+                disturbance = np.random.uniform(-random_disturbance, random_disturbance, 3)
+            action[:3] += disturbance
         if periodic_disturbance_interval is not None and (
             int(curr_t / periodic_disturbance_interval)
             != int((curr_t - env.control_timestep) / periodic_disturbance_interval)
@@ -605,7 +612,14 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
         true_joint = float(base_env.sim.data.qpos[base_env.cabinet_qpos_addrs])
         estimated_joint = float(kinematic.quantities["kinematic_joint"][2].item())
         joint_error = estimated_joint + true_joint
+        kinematic_joint = kinematic.quantities["kinematic_joint"].detach().cpu().numpy().reshape(-1)
+        kinematic_axis_error = float(
+            np.linalg.norm(kinematic_joint[:2] - np.array([np.pi / 2, np.pi / 2]))
+        )
+        kinematic_anchor_pos = kinematic_joint[3:6]
+        anchor_error = float(np.linalg.norm(kinematic_anchor_pos - initial_drawer_handle_pos[:3]))
         grasp_estimate = float(grasp.quantities["likelihood_grasped_drawer"].item())
+        grasp_bool = bool(grasp_estimate > 0.5)
         actual_grasped = bool(np.asarray(obs.get("robot0_contact", base_env._has_gripper_contact)).item())
         if visualizers is not None:
             update_demo_visualizers(visualizers, components, curr_t, obs.get("drawer_orientation"))
@@ -615,7 +629,11 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
                   f"true={true_joint:.6f}, err={joint_error:+.6f}, "
                   f"grasp_est={grasp_estimate:.6f}, grasped={actual_grasped}", flush=True)
         if stop_on_done and (done or reward == 1.0):
-            return True, step_idx, joint_error, grasp_estimate, actual_grasped
+            done_wait_steps = min(done_wait_steps + 1, 50)
+            if done_wait_steps >= 50:
+                return True, step_idx, joint_error, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
+        else:
+            done_wait_steps = 0
         curr_t += env.control_timestep
 
         #add time label to mujoco simulation
@@ -624,11 +642,11 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
             render_frame(env, curr_t)
         step_idx += 1
         if max_timesteps is not None and step_idx > max_timesteps:
-            return False, max_timesteps, joint_error, grasp_estimate, actual_grasped
+            return False, max_timesteps, joint_error, grasp_bool and actual_grasped, actual_grasped, anchor_error
 
         # Get current joint positions
-        panda_qpos = robot._joint_positions
-        print(f"Current joint positions: {panda_qpos}")
+        # panda_qpos = robot._joint_positions
+        # print(f"Current joint positions: {panda_qpos}")
 
 
 def main(device, env, **kwargs):

@@ -124,7 +124,7 @@ class DrawerPositionEstimator(EstimationComponent):
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_depth : Union[float, None] = None,
                  depth_prior : float = 0.5,
-                 initial_uncertainty_scale : Union[float, None] = 2.0,
+                 initial_uncertainty_scale : Union[float, None] = 3.0,
                  initial_uncertainty_xy : float = 0.5,
                  initial_uncertainty_depth : float = 1.0,
                  initial_uncertainty_xy_none : float = 0.1,
@@ -140,7 +140,7 @@ class DrawerPositionEstimator(EstimationComponent):
                  forward_noise_grasped_coeff : float = 1e1,
                  forward_noise_base : float = 0.005,
                  grasped_update_R_scale : float = 1e-6,
-                 grasped_outlier_rejection_threshold: Union[float, None] = None,
+                 grasped_outlier_rejection_threshold: Union[float, None] = 0.05,
                  measurement_existence_threshold : float = 0.5,
                  grasped_uncertainty_threshold : float = 0.1,
                  missed_absent_measurement_uncertainty_coeff : float = 0.1,
@@ -795,7 +795,7 @@ class KinematicJointEstimator(EstimationComponent):
                  grasp_floor: float = 0.000000000001,
                  initial_azimuth_default: float = math.pi/4,
                  initial_elevation_default: float = math.pi/2,
-                 outlier_rejection_treshold: float = None,
+                 outlier_rejection_treshold: float = 1.0,
                  shift_clip_min: float = 1e-10):
         """
         Initialize the kinematic joint estimator.
