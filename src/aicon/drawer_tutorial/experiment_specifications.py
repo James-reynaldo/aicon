@@ -13,7 +13,7 @@ from aicon.drawer_tutorial.estimators import (
 from aicon.drawer_tutorial.goals import DrawerOpenViaJointGoal, DrawerUncertaintyGoal
 from aicon.drawer_tutorial.sensors import BearingSensor, DrawerPoseSenser, EEForceSensor, EEPoseSensor
 
-OPEN_VALUE = -0.02  # The open value for the drawer joint, used in the DrawerOpenViaJointGoal
+OPEN_VALUE = -0.04  # The open value for the drawer joint, used in the DrawerOpenViaJointGoal
 
 def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params=None, connection_params=None,
                                                noise_scale: float = 0.0):

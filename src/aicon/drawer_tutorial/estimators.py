@@ -123,9 +123,9 @@ class DrawerPositionEstimator(EstimationComponent):
                  prevent_loops_in_differentiation: bool = True,
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_depth : Union[float, None] = None,
-                 depth_prior : float = 0.8,
-                 initial_uncertainty_scale : Union[float, None] = 200,
-                 initial_uncertainty_xy : float = 0.2,
+                 depth_prior : float = 0.5,
+                 initial_uncertainty_scale : Union[float, None] = 1.5,
+                 initial_uncertainty_xy : float = 0.5,
                  initial_uncertainty_depth : float = 1.0,
                  initial_uncertainty_xy_none : float = 0.1,
                  initial_uncertainty_depth_none : float = 0.3,
@@ -137,13 +137,10 @@ class DrawerPositionEstimator(EstimationComponent):
                  visual_likelihood_steepness : float = 5.0,
                  R_add_scale : float = 5.0,
                  measurement_nan_reject_scale : float = 0.01,
-                 forward_noise_grasped_coeff : float = 0.15,
+                 forward_noise_grasped_coeff : float = 1e1,
                  forward_noise_base : float = 0.005,
-                 grasped_update_R_scale : float = 0.03,
+                 grasped_update_R_scale : float = 1e-6,
                  grasped_outlier_rejection_threshold: Union[float, None] = None,
-                 rigid_grasp_force_threshold: float = 10.0,
-                 rigid_grasp_force_scale: float = 10.0,
-                 rigid_grasp_update_gain: float = 0.35,
                  measurement_existence_threshold : float = 0.5,
                  grasped_uncertainty_threshold : float = 0.1,
                  missed_absent_measurement_uncertainty_coeff : float = 0.1,
@@ -671,7 +668,7 @@ class VisibleEstimator(EstimationComponent):
                  initial_likelihood_prior: float = 0.95,
                  initial_clip_min: float = 0.02,
                  initial_clip_max: float = 0.98,
-                 update_gain: float = 0.5,
+                 update_gain: float = 2.2,
                  clip_min: float = 1e-9,
                  clip_max: float = 0.9999999):
         """
@@ -783,19 +780,22 @@ class KinematicJointEstimator(EstimationComponent):
                  prevent_loops_in_differentiation: bool = True,
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_rotation_xy : Union[float, None] = None,
-                 initial_uncertainty_scale : Union[float, None] = None,
+                 initial_uncertainty_scale : Union[float, None] = 1e2,
+                 initial_elevation_uncertainty_scale: float = 1e-6,
+                 initial_azimuth_uncertainty_scale: float = 1e0,
+                 joint_initial_uncertainty_scale: float = 1e-3,
                  sample_init_mean : bool = False,
-                 grasped_noise: float = 0.002,
-                 ungrasped_noise: float = 0.001,
-                 axis_azimuth_process_noise: float = 0.001,
-                 axis_elevation_process_noise: float = 0.001,
-                 joint_process_noise: float = 0.001,
-                 anchor_process_noise: float = 1e-6,
+                 grasped_noise: float = 1e-2,
+                 ungrasped_noise: float = 5e-5,
+                 axis_azimuth_process_noise: float = 1e-2,
+                 axis_elevation_process_noise: float = 1e-2,
+                 joint_process_noise: float = 1e0,
+                 anchor_process_noise: float = 2e-2,
                  grasp_threshold: float = 0.5,
                  grasp_floor: float = 0.000000000001,
-                 initial_azimuth_default: float = -math.pi/4,
-                 initial_elevation_default: float = -math.pi/2,
-                 outlier_rejection_treshold: float = 4.0,
+                 initial_azimuth_default: float = math.pi/4,
+                 initial_elevation_default: float = math.pi/2,
+                 outlier_rejection_treshold: float = None,
                  shift_clip_min: float = 1e-10):
         """
         Initialize the kinematic joint estimator.
@@ -812,11 +812,19 @@ class KinematicJointEstimator(EstimationComponent):
             max_length_differentiation_trace: Maximum length of differentiation trace
             initial_rotation_xy: Initial rotation in XY plane
             initial_uncertainty_scale: Scale factor for initial uncertainty
+            axis_initial_uncertainty_scale: Relative initial variance for azimuth and elevation
+            joint_initial_uncertainty_scale: Relative initial variance for joint travel
             sample_init_mean: Whether to sample initial mean
         """
         # Initialization parameters
         self.initial_rotation_xy = initial_rotation_xy
         self.initial_uncertainty_scale = initial_uncertainty_scale
+        # The EKF assigns a residual according to state uncertainty.  Keep
+        # these as separate multipliers so callers can make drawer travel
+        # (state index 2) more adjustable than the fixed joint axis (0:2).
+        self.initial_azimuth_uncertainty_scale = initial_azimuth_uncertainty_scale
+        self.initial_elevation_uncertainty_scale = initial_elevation_uncertainty_scale
+        self.joint_initial_uncertainty_scale = joint_initial_uncertainty_scale
         self.sample_init_mean = sample_init_mean
         self.initial_azimuth_default = initial_azimuth_default
         self.initial_elevation_default = initial_elevation_default
@@ -851,6 +859,9 @@ class KinematicJointEstimator(EstimationComponent):
             self.quantities["uncertainty_joint"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device)
         else:
             self.quantities["uncertainty_joint"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_uncertainty_scale
+        self.quantities["uncertainty_joint"][0, 0] *= self.initial_azimuth_uncertainty_scale
+        self.quantities["uncertainty_joint"][1, 1] *= self.initial_elevation_uncertainty_scale
+        self.quantities["uncertainty_joint"][2, 2] *= self.joint_initial_uncertainty_scale
         self.quantities["uncertainty_joint"][3:6,3:6] = self.connections["DrawerKinematics"].connected_quantities["uncertainty_drawer"]
         if self.sample_init_mean:
             init_angles = torch.distributions.multivariate_normal.MultivariateNormal(self.quantities["kinematic_joint"][0:2],self.quantities["uncertainty_joint"][:2,:2]).sample()
@@ -929,4 +940,4 @@ class KinematicJointEstimator(EstimationComponent):
         """
         self.quantities["kinematic_joint"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
         self.quantities["uncertainty_joint"] = torch.zeros(self.state_dim, self.state_dim, dtype=self.dtype,
-                                                            device=self.device)  
+                                                            device=self.device)

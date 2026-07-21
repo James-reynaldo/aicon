@@ -4,6 +4,8 @@ This module defines action components for controlling the robot in the drawer ma
 including end-effector velocity control and hand synergy actions.
 """
 
+from collections import deque
+
 import torch
 from loguru import logger
 
@@ -48,7 +50,36 @@ class VeloEEAction(ActionComponent):
 
         print("steepest_grad:", steepest_grad)
         print("gradient trace:", trace)
-        # print("timestamps:", timestamps)
+        trace_value = None
+        trace_description = ""
+        if isinstance(trace, torch.Tensor):
+            if trace.numel() == 1:
+                trace_value = trace.detach().cpu().item()
+                trace_description = str(trace_value)
+            else:
+                trace_description = str(trace.tolist())
+        elif isinstance(trace, (list, tuple)):
+            trace_description = str(list(trace))
+            try:
+                trace_value = float(trace[-1])
+            except Exception:
+                trace_value = None
+        else:
+            trace_description = str(trace)
+            try:
+                trace_value = float(trace)
+            except Exception:
+                trace_value = None
+
+        self.gradient_trace = trace
+        self.gradient_trace_description = trace_description
+        if trace_value is not None:
+            if not hasattr(self, "gradient_trace_history"):
+                self.gradient_trace_history = deque()
+                self.gradient_trace_timestamps = deque()
+            self.gradient_trace_history.append(trace_value)
+            self.gradient_trace_timestamps.append(float(self.timestamp))
+
         t_part = self.perform_gradient_descent(last_action, steepest_grad)
 
         t_part = self.safety_limiting(t_part)
@@ -103,6 +134,10 @@ class VeloEEAction(ActionComponent):
         """
         new_action = torch.zeros(3, dtype=self.dtype, device=self.device)
         self.quantities["action_velo_ee"] = new_action
+        self.gradient_trace_history = deque()
+        self.gradient_trace_timestamps = deque()
+        self.gradient_trace_description = ""
+        self.gradient_trace = None
         return True
 
     def initial_definitions(self):
@@ -110,6 +145,10 @@ class VeloEEAction(ActionComponent):
         Define initial values for the action quantities.
         """
         self.quantities["action_velo_ee"] = torch.zeros(self.state_dim, dtype=self.dtype, device=self.device)
+        self.gradient_trace_history = deque()
+        self.gradient_trace_timestamps = deque()
+        self.gradient_trace_description = ""
+        self.gradient_trace = None
 
 
 class GripperAction(ActionComponent):

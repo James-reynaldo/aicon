@@ -40,11 +40,22 @@ KINEMATIC_DRAWER_INDICATOR = "kinematic_joint_drawer_position"
 KINEMATIC_DRAWER_INITIAL = "kinematic_joint_drawer_initial_position"
 EE_POS_INDICATOR = "ee_position"
 DRAWER_POSITION_INDICATOR = "drawer_position"
+
+
+# Visible
+# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]) #visible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.57252049,  0.47811905,  0.10284968, -2.0172723,   1.15352072,  1.42225441,  -0.17381949]) #visible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]) #visible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.54045225,  0.45672133,  0.18660044, -2.06409333,  1.23236357,  1.52805897,  -0.16151129]) #visible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]) #visible
+
+# Invisible
 # DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.61320311,  0.85524774, -0.0179054,  -1.7072619,   1.06449885,  1.33379331, -0.28968686])
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.59114603,  0.62355354, -0.00245896, -2.16374032,  1.05898897,  1.47348643, -0.47575451])
-DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.55801981,  0.83242474,  0.11796939, -1.66364752,  1.14582064,  1.44749675, -0.15419586])
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.57798865,  0.72443188,  0.04076983, -1.99426233,  1.08883333,  1.4795042,  -0.39521093])
+# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]) # invisible
+# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]) # invisible at first
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]) # invisible
+# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]) # invisible
+
 class GraspDiagnosticsPlotter:
     """Display the grasp-likelihood inputs and their decision thresholds live."""
 
@@ -57,9 +68,15 @@ class GraspDiagnosticsPlotter:
         self.uncertainties = deque()
         self.gripper_activations = deque()
         self.force_thresholds = deque()
+        self.visibility_likelihoods = deque()
+        self.visibility_likelihood_threshold = deque()
+        self.drawer_uncertainty = deque()
+        self.drawer_uncertainty_threshold = deque()
+        self.likelihood_grasped_drawer = deque()
+        self.likelihood_grasped_threshold = deque()
 
         plt.ion()
-        self.figure, self.axes = plt.subplots(2, 2, num="Grasp diagnostics", figsize=(11, 7))
+        self.figure, self.axes = plt.subplots(3, 3, num="Grasp diagnostics", figsize=(11, 7))
         self.figure.canvas.manager.set_window_title("Grasp diagnostics")
         self.figure.tight_layout(pad=3.0)
 
@@ -68,6 +85,9 @@ class GraspDiagnosticsPlotter:
             (self.axes[0, 1], "EE–drawer distance", "Distance (m)", "distances", None, "close_dist_threshold"),
             (self.axes[1, 0], "Distance uncertainty", "Uncertainty", "uncertainties", None, "uncertainty_dist_threshold"),
             (self.axes[1, 1], "Gripper activation", "Activation", "gripper_activations", None, "gripper_activation_threshold"),
+            (self.axes[1, 2], "Visibility likelihood", "Likelihood", "visibility_likelihoods", "visibility_likelihood_threshold", "visibility_likelihood_threshold"),
+            (self.axes[0, 2], "Drawer uncertainty", "Uncertainty", "drawer_uncertainty", "drawer_uncertainty_threshold", "drawer_uncertainty_threshold"),
+            (self.axes[2, 0], "Likelihood grasped", "Likelihood", "likelihood_grasped_drawer", "likelihood_grasped_threshold", "likelihood_grasped_threshold"),
         ]
         self.lines = []
         for axis, title, ylabel, _, _, _ in self._series:
@@ -86,7 +106,7 @@ class GraspDiagnosticsPlotter:
         return float(value.detach().cpu().reshape(-1)[0])
 
     def update(self, simulation_time, force_magnitude, distance_ee_drawer,
-               uncertainty_dist, gripper_activation, time_since_hand_change):
+               uncertainty_dist, gripper_activation, time_since_hand_change, likelihood_grasped_drawer, visibility_likelihood, drawer_uncertainty):
         """Record one simulation sample and refresh the interactive plot."""
         if not plt.fignum_exists(self.figure.number):
             return
@@ -96,6 +116,12 @@ class GraspDiagnosticsPlotter:
         self.distances.append(self._scalar(distance_ee_drawer))
         self.uncertainties.append(self._scalar(uncertainty_dist))
         self.gripper_activations.append(self._scalar(gripper_activation))
+        self.visibility_likelihoods.append(self._scalar(visibility_likelihood))
+        self.visibility_likelihood_threshold.append(None)  # Placeholder for future threshold if needed
+        self.drawer_uncertainty.append(self._scalar(torch.norm(drawer_uncertainty)))
+        self.drawer_uncertainty_threshold.append(None)
+        self.likelihood_grasped_drawer.append(self._scalar(likelihood_grasped_drawer))
+        self.likelihood_grasped_threshold.append(None)
         ft_tresh = min(
             self._scalar(time_since_hand_change[1]) * self.grasp_connection.ft_tresh_multiplier,
             self.grasp_connection.ft_tresh_cap,
@@ -105,7 +131,8 @@ class GraspDiagnosticsPlotter:
         while self.times[-1] - self.times[0] > self.history_seconds:
             for samples in (
                 self.times, self.force_magnitudes, self.distances,
-                self.uncertainties, self.gripper_activations, self.force_thresholds,
+                self.uncertainties, self.gripper_activations, self.force_thresholds, self.visibility_likelihoods,
+                self.visibility_likelihood_threshold, self.drawer_uncertainty, self.drawer_uncertainty_threshold, self.likelihood_grasped_drawer
             ):
                 samples.popleft()
 
@@ -113,9 +140,14 @@ class GraspDiagnosticsPlotter:
         for (axis, _, _, values_name, thresholds_name, threshold_name), (value_line, threshold_line) in zip(self._series, self.lines):
             value_line.set_data(times, list(getattr(self, values_name)))
             if thresholds_name is None:
-                threshold_values = [getattr(self.grasp_connection, threshold_name)] * len(times)
+                tval = getattr(self.grasp_connection, threshold_name)
+                try:
+                    tval = float(tval)
+                except Exception:
+                    tval = np.nan
+                threshold_values = [tval] * len(times)
             else:
-                threshold_values = list(getattr(self, thresholds_name))
+                threshold_values = [np.nan if v is None else v for v in list(getattr(self, thresholds_name))]
             threshold_line.set_data(times, threshold_values)
             axis.relim()
             axis.autoscale_view()
@@ -126,6 +158,67 @@ class GraspDiagnosticsPlotter:
                 axis.set_ylim(0.0, max(5.0 * threshold, 1e-6))
             if len(times) > 1:
                 axis.set_xlim(max(0.0, times[-1] - self.history_seconds), times[-1])
+
+        self.figure.canvas.draw_idle()
+        self.figure.canvas.flush_events()
+
+
+class GradientTracePlotter:
+    """Display the gradient trace for end-effector velocity optimization."""
+
+    def __init__(self, action_component, history_seconds=30.0):
+        self.action_component = action_component
+        self.history_seconds = history_seconds
+        self.times = deque()
+        self.trace_values = deque()
+
+        plt.ion()
+        self.figure, self.axis = plt.subplots(num="Gradient trace", figsize=(8, 4))
+        self.figure.canvas.manager.set_window_title("Gradient trace")
+        self.axis.set_title("Gradient trace")
+        self.axis.set_xlabel("Simulation time (s)")
+        self.axis.set_ylabel("Trace")
+        self.axis.grid(True, alpha=0.3)
+        self.line, = self.axis.plot([], [], label="trace")
+        self.axis.legend(loc="best")
+        self.annotation = self.axis.text(
+            0.01,
+            0.95,
+            "trace: []",
+            transform=self.axis.transAxes,
+            fontsize=9,
+            verticalalignment="top",
+            bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none"},
+        )
+        plt.show(block=False)
+
+    def update(self, simulation_time):
+        if not plt.fignum_exists(self.figure.number):
+            return
+
+        trace_text = "trace: []"
+        if hasattr(self.action_component, "gradient_trace_description") and self.action_component.gradient_trace_description:
+            trace_text = f"trace: {self.action_component.gradient_trace_description}"
+        self.annotation.set_text(trace_text)
+
+        trace_value = None
+        if hasattr(self.action_component, "gradient_trace_history") and self.action_component.gradient_trace_history:
+            trace_value = self.action_component.gradient_trace_history[-1]
+
+        if trace_value is not None:
+            self.times.append(float(simulation_time))
+            self.trace_values.append(float(trace_value))
+
+            while self.times and self.times[-1] - self.times[0] > self.history_seconds:
+                self.times.popleft()
+                self.trace_values.popleft()
+
+            self.line.set_data(list(self.times), list(self.trace_values))
+
+        self.axis.relim()
+        self.axis.autoscale_view()
+        if len(self.times) > 1:
+            self.axis.set_xlim(max(0.0, self.times[-1] - self.history_seconds), self.times[-1])
 
         self.figure.canvas.draw_idle()
         self.figure.canvas.flush_events()
@@ -212,7 +305,7 @@ class KinematicJointAnglePlotter:
         self.anchor_y_targets.append(self.ANCHOR_Y_TARGET)
         drawer_handle_pos = self.base_env.get_drawer_handle_pos()
         true_joint = float(self.base_env.sim.data.qpos[self.base_env.cabinet_qpos_addrs])
-        self.joint_errors.append(state + true_joint)
+        self.joint_errors.append(state - true_joint)
         print(f"Estimated joint state: {state}, True joint state: {true_joint}, Joint error: {state - true_joint}")
         self.joint_error_targets.append(0.0)
         if estimated_drawer_position is None:
@@ -356,18 +449,20 @@ class DrawerPositionVisualizer:
         self.base_env.sim.forward()
 
 def create_demo_visualizers(env, components, visualize_kinematic_angles=True,
-                            visualize_ee=True, visualize_grasp_diagnostics=True, visualize_drawer_position=True):
+                            visualize_ee=True, visualize_grasp_diagnostics=True,
+                            visualize_drawer_position=True, visualize_gradient_trace=True):
     """Create the optional visualizations shared by the demo and sweep runners."""
     grasp_estimator = components["GraspLikelihoodEstimator"]
     return {
         "joint": KinematicJointVisualizer(env) if visualize_kinematic_angles else None,
-        "joint_angles": KinematicJointAnglePlotter(env) if visualize_kinematic_angles else None,
-        "ee": EEPosVisualizer(env) if visualize_ee else None,
+        # "joint_angles": KinematicJointAnglePlotter(env) if visualize_kinematic_angles else None,
+        # "ee": EEPosVisualizer(env) if visualize_ee else None,
         "grasp": (
             GraspDiagnosticsPlotter(grasp_estimator.connections["GraspedLikelihood"])
             if visualize_grasp_diagnostics else None
         ),
-        "drawer_position": DrawerPositionVisualizer(env) if visualize_drawer_position else None
+        "drawer_position": DrawerPositionVisualizer(env) if visualize_drawer_position else None,
+        "gradient_trace": GradientTracePlotter(components["EEVelocities"]) if visualize_gradient_trace else None,
     }
 
 
@@ -379,14 +474,14 @@ def update_demo_visualizers(visualizers, components, simulation_time, drawer_ori
             components["KinematicJointEstimator"].quantities["kinematic_joint"]
         )
 
-    joint_angles_plotter = visualizers["joint_angles"]
-    if joint_angles_plotter is not None:
-        joint_angles_plotter.update(
-            simulation_time,
-            components["KinematicJointEstimator"].quantities["kinematic_joint"],
-            drawer_orientation,
-            components["DrawerPosEstimator"].quantities["position_drawer"],
-        )
+    # joint_angles_plotter = visualizers["joint_angles"]
+    # if joint_angles_plotter is not None:
+    #     joint_angles_plotter.update(
+    #         simulation_time,
+    #         components["KinematicJointEstimator"].quantities["kinematic_joint"],
+    #         drawer_orientation,
+    #         components["DrawerPosEstimator"].quantities["position_drawer"],
+    #     )
 
     drawer_position_visualizer = visualizers["drawer_position"]
     if drawer_position_visualizer is not None:
@@ -394,9 +489,13 @@ def update_demo_visualizers(visualizers, components, simulation_time, drawer_ori
             components["DrawerPosEstimator"].quantities["position_drawer"]
         )
 
-    ee_visualizer = visualizers["ee"]
-    if ee_visualizer is not None:
-        ee_visualizer.update(components["EEPoseEstimator"].quantities["pose_ee"])
+    # ee_visualizer = visualizers["ee"]
+    # if ee_visualizer is not None:
+    #     ee_visualizer.update(components["EEPoseEstimator"].quantities["pose_ee"])
+
+    gradient_plotter = visualizers["gradient_trace"]
+    if gradient_plotter is not None:
+        gradient_plotter.update(simulation_time)
 
     grasp_plotter = visualizers["grasp"]
     if grasp_plotter is not None:
@@ -407,6 +506,9 @@ def update_demo_visualizers(visualizers, components, simulation_time, drawer_ori
             components["DistanceEstimator"].quantities["uncertainty_dist"],
             components["GripperAction"].quantities["gripper_activation"],
             components["GraspLikelihoodEstimator"].quantities["time_since_hand_change"],
+            components["GraspLikelihoodEstimator"].quantities["likelihood_grasped_drawer"],
+            components["VisibleEstimator"].quantities["likelihood_visible_drawer"],
+            components["DrawerPosEstimator"].quantities["uncertainty_drawer"]
         )
 
 def setup_env(device_type, initial_qpos=None):
@@ -419,7 +521,7 @@ def setup_env(device_type, initial_qpos=None):
         has_offscreen_renderer=True,
         ignore_done=True,
         use_camera_obs=False,
-        render_camera="sideview", #'frontview', 'birdview', 'agentview', 'sideview', 'robot0_robotview', 'robot0_eye_in_hand'
+        render_camera="frontview", #'frontview', 'birdview', 'agentview', 'sideview', 'robot0_robotview', 'robot0_eye_in_hand'
         horizon=100,
         control_freq=30,
         controller_configs=suite.load_controller_config(default_controller="OSC_POSE"),
@@ -452,7 +554,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
               periodic_disturbance_magnitude=0.0, noise_scale=0.0,
               visualize_kinematic_angles=True, visualize_ee=True,
               visualize_drawer_position=True, visualize_grasp_diagnostics=True,
-              render=None, status_label=None):
+              visualize_gradient_trace=True, render=None, status_label=None):
     """Shared drawer-control loop for the interactive demo and parameter sweeps."""
     if reset_on_start:
         env.reset()
@@ -472,6 +574,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
         env, components, visualize_kinematic_angles=visualize_kinematic_angles,
         visualize_ee=visualize_ee, visualize_drawer_position=visualize_drawer_position,
         visualize_grasp_diagnostics=visualize_grasp_diagnostics,
+        visualize_gradient_trace=visualize_gradient_trace,
     ) if render else None
 
     curr_t, step_idx = 0.0, 1
