@@ -124,7 +124,7 @@ class DrawerPositionEstimator(EstimationComponent):
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_depth : Union[float, None] = None,
                  depth_prior : float = 0.5,
-                 initial_uncertainty_scale : Union[float, None] = 1.5,
+                 initial_uncertainty_scale : Union[float, None] = 2.0,
                  initial_uncertainty_xy : float = 0.5,
                  initial_uncertainty_depth : float = 1.0,
                  initial_uncertainty_xy_none : float = 0.1,
