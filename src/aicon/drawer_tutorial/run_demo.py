@@ -14,7 +14,7 @@ from robosuite.wrappers import VisualizationWrapper
 
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion, OPEN_VALUE
 
-RENDER = True  # Set to True to visualize the environment
+RENDER = False  # Set to True to visualize the environment
 
 if RENDER:
     from robosuite.devices import Keyboard, SpaceMouse
@@ -625,13 +625,13 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
             update_demo_visualizers(visualizers, components, curr_t, obs.get("drawer_orientation"))
         if status_label is not None:
             limit = max_timesteps if max_timesteps is not None else "inf"
-            print(f"  [{status_label}] step {step_idx:04d}/{limit}: est={estimated_joint:.6f}, "
-                  f"true={true_joint:.6f}, err={joint_error:+.6f}, "
-                  f"grasp_est={grasp_estimate:.6f}, grasped={actual_grasped}", flush=True)
-        if stop_on_done and (done or reward == 1.0):
+            print(f"  [{status_label}] step {step_idx:04d}/{limit}: true_joint={true_joint:.6f} estimated_joint={estimated_joint:.6f}"
+                  f"kinematic_axis_error={kinematic_axis_error:.6f}, err={joint_error:+.6f}, "
+                  f"anchor_error={anchor_error:.6f}, grasped={grasp_bool and actual_grasped}", flush=True)
+        if stop_on_done and (done or reward == 1.0 or done_wait_steps > 0):
             done_wait_steps = min(done_wait_steps + 1, 50)
             if done_wait_steps >= 50:
-                return True, step_idx, joint_error, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
+                return True, step_idx, joint_error,true_joint, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
         else:
             done_wait_steps = 0
         curr_t += env.control_timestep
@@ -642,7 +642,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
             render_frame(env, curr_t)
         step_idx += 1
         if max_timesteps is not None and step_idx > max_timesteps:
-            return False, max_timesteps, joint_error, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
+            return False, max_timesteps, joint_error,true_joint, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
 
         # Get current joint positions
         # panda_qpos = robot._joint_positions

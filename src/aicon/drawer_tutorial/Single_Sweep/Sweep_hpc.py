@@ -101,14 +101,14 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
     job_metadata.update(job.get("metadata", {}))
 
     try:
-        for run in range(4, 5):
+        for run in range(NUM_TRIALS_PER_JOB):
             if run < len(Visible_Initial_qpos_list):
                 initial_panda_qpos = Visible_Initial_qpos_list[run]
             else:
                 initial_panda_qpos = Invisible_Initial_qpos_list[run - len(Visible_Initial_qpos_list)]
             env = setup_env(initial_qpos=initial_panda_qpos)
             set_global_seed(run)  # set seed for reproducibility
-            success, timesteps, err, grasp, kinematic_axis_error, anchor_error = run_trial(
+            success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
                 env,
                 estimator_params=job["trial_params"],
                 max_timesteps=MAX_TIMESTEPS,
@@ -128,6 +128,7 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
                 seed=run,
                 timesteps=timesteps,
                 error=err,
+                true_joint=true_joint,
                 grasp=grasp,
                 kinematic_axis_error=kinematic_axis_error,
                 anchor_error=anchor_error,
@@ -142,6 +143,8 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
                 success,
                 timesteps,
                 err,
+                true_joint,
+                grasp,
                 kinematic_axis_error,
                 anchor_error
             ))
@@ -156,7 +159,7 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
         #     )
         #     for run in range(NUM_TRIALS_PER_JOB, NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS):
         #         set_global_seed(run)
-        #         success, timesteps, err, grasp, grasped = run_trial(
+        #         success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
         #             env,
         #             estimator_params=job["trial_params"],
         #             max_timesteps=MAX_TIMESTEPS,
@@ -176,6 +179,10 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
         #             seed=run,
         #             timesteps=timesteps,
         #             error=err,
+        #             true_joint=true_joint,
+        #             grasp=grasp,
+        #             kinematic_axis_error=kinematic_axis_error,
+        #             anchor_error=anchor_error,
         #             metadata=job_metadata,
         #         )
 
@@ -187,6 +194,8 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
         #             success,
         #             timesteps,
         #             err,
+        #             true_joint,
+        #             grasp,
         #             kinematic_axis_error,
         #             anchor_error
         #         ))

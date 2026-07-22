@@ -108,6 +108,7 @@ class ExperimentStore:
                 success INTEGER,
                 timesteps INTEGER,
                 error REAL,
+                true_joint REAL,
                 grasp INTEGER,
                 kinematic_axis_error REAL,
                 anchor_error REAL,
@@ -158,6 +159,7 @@ class ExperimentStore:
         grasp: Optional[bool] = None,
         kinematic_axis_error: Optional[float] = None,
         anchor_error: Optional[float] = None,
+        true_joint: Optional[float] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ):
         config_id = _hash_config(params)
@@ -170,8 +172,8 @@ class ExperimentStore:
             VALUES (?, ?)
             """, (config_id, json.dumps(params)))
             cur.execute("""
-            INSERT INTO trials (config_id, seed, success, timesteps, error, grasp, kinematic_axis_error, anchor_error, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trials (config_id, seed, success, timesteps, error, grasp, kinematic_axis_error, anchor_error, true_joint, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 config_id,
                 seed,
@@ -181,6 +183,7 @@ class ExperimentStore:
                 None if grasp is None else int(grasp),
                 None if kinematic_axis_error is None else float(kinematic_axis_error),
                 None if anchor_error is None else float(anchor_error),
+                None if true_joint is None else float(true_joint),
                 metadata_json,
             ))
             self.conn.commit()
@@ -196,7 +199,7 @@ class ExperimentStore:
 
         cur = self.conn.cursor()
         cur.execute("""
-        SELECT success, timesteps, error, grasp, kinematic_axis_error, anchor_error, metadata
+        SELECT success, timesteps, error, grasp, kinematic_axis_error, anchor_error, true_joint, metadata
         FROM trials
         WHERE config_id = ?
         """, (config_id,))
@@ -207,10 +210,11 @@ class ExperimentStore:
                 "success": r[0],
                 "timesteps": r[1],
                 "error": r[2],
-                "metadata": json.loads(r[6]) if r[6] is not None else None,
+                "metadata": json.loads(r[7]) if r[7] is not None else None,
                 "grasp": r[3],
                 "kinematic_axis_error": r[4],
-                "anchor_error": r[5]
+                "anchor_error": r[5],
+                "true_joint": r[6]
             }
             for r in rows
         ]
