@@ -12,7 +12,7 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR_DISTURBANCE = DATA_DIR / "disturbance"
 DATA_DIR_NOISE = DATA_DIR / "noise"
 DATA_DIR_NORMAL = DATA_DIR / "normal"
-NUM_TRIALS_PER_JOB = 1
+NUM_TRIALS_PER_JOB = 10
 BOUNDARY_EXTENDED_TRIALS = 7
 RANDOM_INIT_TIME = 0  # seconds of random movement at start
 MAX_TIMESTEPS = 1000
@@ -101,7 +101,7 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
     job_metadata.update(job.get("metadata", {}))
 
     try:
-        for run in range(NUM_TRIALS_PER_JOB):
+        for run in range(4, 5):
             if run < len(Visible_Initial_qpos_list):
                 initial_panda_qpos = Visible_Initial_qpos_list[run]
             else:

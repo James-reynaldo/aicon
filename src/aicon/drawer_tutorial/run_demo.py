@@ -14,7 +14,7 @@ from robosuite.wrappers import VisualizationWrapper
 
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion, OPEN_VALUE
 
-RENDER = False  # Set to True to visualize the environment
+RENDER = True  # Set to True to visualize the environment
 
 if RENDER:
     from robosuite.devices import Keyboard, SpaceMouse
@@ -642,7 +642,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
             render_frame(env, curr_t)
         step_idx += 1
         if max_timesteps is not None and step_idx > max_timesteps:
-            return False, max_timesteps, joint_error, grasp_bool and actual_grasped, actual_grasped, anchor_error
+            return False, max_timesteps, joint_error, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
 
         # Get current joint positions
         # panda_qpos = robot._joint_positions
