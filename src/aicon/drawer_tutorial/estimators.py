@@ -123,9 +123,11 @@ class DrawerPositionEstimator(EstimationComponent):
                  prevent_loops_in_differentiation: bool = True,
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_depth : Union[float, None] = None,
-                 depth_prior : float = 0.5,
-                 initial_uncertainty_scale : Union[float, None] = 3.0,
-                 initial_uncertainty_xy : float = 0.5,
+                 depth_prior : float = None,
+                 depth_exact_prior_from_env: bool = True,
+                 depth_exact_prior_noise_std: float = 0.05,
+                 initial_uncertainty_scale : Union[float, None] = 1.5,
+                 initial_uncertainty_xy : float = 1.0,
                  initial_uncertainty_depth : float = 1.0,
                  initial_uncertainty_xy_none : float = 0.1,
                  initial_uncertainty_depth_none : float = 0.3,
@@ -146,7 +148,8 @@ class DrawerPositionEstimator(EstimationComponent):
                  missed_absent_measurement_uncertainty_coeff : float = 0.1,
                  hand_change_recovery_time : float = 0.5,
                  tf_lookup_timeout : float = 5.0,
-                 initial_drawer_pos : Union[None, Iterable] = None):
+                 initial_drawer_pos : Union[None, Iterable] = None,
+                 sim_env_pointer = None):
         """
         Initialize the drawer position estimator.
         
@@ -160,8 +163,12 @@ class DrawerPositionEstimator(EstimationComponent):
             no_differentiation: Whether to disable differentiation
             prevent_loops_in_differentiation: Whether to prevent loops in differentiation
             max_length_differentiation_trace: Maximum length of differentiation trace
-            initial_depth: Initial depth estimate override
-            depth_prior: Default depth prior when relative depth is unknown
+            initial_depth: Initial optical-axis depth estimate override.
+            depth_prior: Default optical-axis depth prior when relative depth is unknown.
+            depth_exact_prior_from_env: Initialize from the simulated handle's
+                optical-axis depth in the camera frame.
+            depth_exact_prior_noise_std: Standard deviation in meters of
+                zero-mean Gaussian noise added to the exact depth prior.
             initial_uncertainty_scale: Scale factor for initial uncertainty
             initial_uncertainty_xy: Initial x/y uncertainty when scaled
             initial_uncertainty_depth: Initial depth uncertainty when scaled
@@ -186,10 +193,13 @@ class DrawerPositionEstimator(EstimationComponent):
             hand_change_recovery_time: Time threshold used for hand-change uncertainty logic
             tf_lookup_timeout: Timeout for TF frame lookup
             initial_drawer_pos: Initial drawer position override
+            sim_env_pointer: Simulation environment used for the exact prior
         """
         #Initialization parameters
         self.initial_depth = initial_depth
         self.depth_prior = depth_prior
+        self.depth_exact_prior_from_env = depth_exact_prior_from_env
+        self.depth_exact_prior_noise_std = depth_exact_prior_noise_std
         self.initial_uncertainty_scale = initial_uncertainty_scale
         self.initial_uncertainty_xy = initial_uncertainty_xy
         self.initial_uncertainty_depth = initial_uncertainty_depth
@@ -200,6 +210,7 @@ class DrawerPositionEstimator(EstimationComponent):
         self.sample_init_mean_distance_threshold = sample_init_mean_distance_threshold
         self.sample_init_mean_uncertainty_multiplier = sample_init_mean_uncertainty_multiplier
         self.initial_drawer_pos = initial_drawer_pos
+        self.sim_env_pointer = sim_env_pointer
         # Edge case handling parameters
         self.measurement_nan_reject_scale = measurement_nan_reject_scale
         self.tf_lookup_timeout = tf_lookup_timeout
@@ -231,7 +242,7 @@ class DrawerPositionEstimator(EstimationComponent):
             if c_cam.connected_quantities_initialized["relative_position_in_CF_drawer"] and \
                     c_cam.connected_quantities_initialized["pose_ee"]:
                 pose_ee = c_cam.connected_quantities["pose_ee"]
-                relative_position = c_cam.connected_quantities["relative_position_in_CF_drawer"]
+                relative_position = c_cam.connected_quantities["relative_position_in_CF_drawer"].clone()
             else:
                 return False
         try:
@@ -241,18 +252,53 @@ class DrawerPositionEstimator(EstimationComponent):
             H_ee_to_cam = H_ee_to_cam_result.to(dtype=self.dtype, device=self.device)
         except (AssertionError, AttributeError):
             print("Fallback on saved transform")
-            H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
-        # print(f"pose_ee:\n{pose_ee}\nrelative_position:\n{relative_position}\nH_ee_to_cam:\n{H_ee_to_cam}")
+            H_ee_to_cam = torch.tensor([
+                [1., 0., 0., -0.08],
+                [0.,  1., 0., 0.],
+                [0.,  0., 1., 0.],
+                [0.,  0., 0., 1.],
+            ], dtype=self.dtype,
+            device=self.device)
         H = torch.einsum("ij,jk->ik", pose_vec_to_homogeneous(pose_ee), H_ee_to_cam)
         if self.initial_drawer_pos is not None:
             initial_mu = torch.tensor(self.initial_drawer_pos, dtype=self.dtype, device=self.device)
         else:
             if torch.all(torch.isnan(relative_position)):
                 return False
-            if self.initial_depth is None:
-                relative_position[2] = self.depth_prior  # prior for where it should be
+            if self.initial_depth is not None:
+                depth = torch.as_tensor(self.initial_depth, dtype=self.dtype, device=self.device)
+            elif not self.depth_exact_prior_from_env:
+                if self.depth_prior is None:
+                    raise ValueError(
+                        "A depth prior is required to initialize a 3D drawer position "
+                        "from a bearing measurement. Set initial_depth, depth_prior, "
+                        "or depth_exact_prior_from_env."
+                    )
+                depth = torch.as_tensor(self.depth_prior, dtype=self.dtype, device=self.device)
             else:
-                relative_position[2] = self.initial_depth
+                sim_env = self.sim_env_pointer.env if hasattr(self.sim_env_pointer, "env") else self.sim_env_pointer
+                handle_position = torch.as_tensor(
+                    sim_env.get_drawer_handle_pos(), dtype=self.dtype, device=self.device
+                )
+                # The bearing is expressed in the camera frame, so use the
+                # handle's optical-axis depth in that same frame.
+                handle_in_camera = torch.einsum(
+                    "ki,ij,j->k",
+                    homogeneous_transform_inverse(H_ee_to_cam),
+                    homogeneous_transform_inverse(pose_vec_to_homogeneous(pose_ee)),
+                    torch.cat([handle_position, torch.ones(1, dtype=self.dtype, device=self.device)]),
+                )[:3]
+                depth = handle_in_camera[2] + self.depth_exact_prior_noise_std * torch.randn(
+                    (), dtype=self.dtype, device=self.device
+                )
+
+            # ``relative_position`` is a unit bearing, not a Cartesian point.
+            # Reconstruct the complete point at the chosen optical-axis depth;
+            # replacing only z would systematically distort x and y.
+            bearing_z = relative_position[2]
+            if bearing_z <= torch.finfo(self.dtype).eps:
+                return False
+            relative_position = relative_position * (depth / bearing_z)
             initial_mu = torch.einsum("ij,j->i", H, torch.concat(
                 [relative_position, torch.ones(1, dtype=self.dtype, device=self.device)]))[:3]
         if self.initial_uncertainty_scale is None:
@@ -315,7 +361,13 @@ class DrawerPositionEstimator(EstimationComponent):
             H_ee_to_cam = H_ee_to_cam_result.to(dtype=self.dtype, device=self.device)
         except (AssertionError, AttributeError):
             print("Fallback on saved transform")
-            H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
+            H_ee_to_cam = torch.tensor([
+                [1., 0., 0., -0.08],
+                [0.,  1., 0., 0.],
+                [0.,  0., 1., 0.],
+                [0.,  0., 0., 1.],
+            ], dtype=self.dtype,
+            device=self.device)
         def process_visual_measurement(Sigma, likelihood_grasped_drawer, likelihood_visible_drawer, mu,
                                        pose_ee, relative_position_in_CF_drawer, uncertainty_ee, dt, dtype, device):
             """
@@ -780,8 +832,8 @@ class KinematicJointEstimator(EstimationComponent):
                  prevent_loops_in_differentiation: bool = True,
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_rotation_xy : Union[float, None] = None,
-                 initial_uncertainty_scale : Union[float, None] = 1e2,
-                 initial_elevation_uncertainty_scale: float = 1e-6,
+                 initial_uncertainty_scale : Union[float, None] = 1e0,
+                 initial_elevation_uncertainty_scale: float = 1e0,
                  initial_azimuth_uncertainty_scale: float = 1e0,
                  joint_initial_uncertainty_scale: float = 1e-3,
                  sample_init_mean : bool = False,
@@ -789,12 +841,12 @@ class KinematicJointEstimator(EstimationComponent):
                  ungrasped_noise: float = 5e-5,
                  axis_azimuth_process_noise: float = 1e-2,
                  axis_elevation_process_noise: float = 1e-2,
-                 joint_process_noise: float = 1e0,
+                 joint_process_noise: float = 1e1,
                  anchor_process_noise: float = 2e-2,
                  grasp_threshold: float = 0.5,
                  grasp_floor: float = 0.000000000001,
-                 initial_azimuth_default: float = math.pi/4,
-                 initial_elevation_default: float = math.pi/2,
+                 initial_azimuth_default: float = math.pi/2 - 0.2,
+                 initial_elevation_default: float = math.pi/2 - 0.2,
                  outlier_rejection_treshold: float = 1.0,
                  shift_clip_min: float = 1e-10):
         """

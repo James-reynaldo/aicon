@@ -72,7 +72,22 @@ def _extract_baseline_value(params, group, name):
         return None
     if group.startswith("connection."):
         _, connection_group = group.split(".", 1)
-        return params.get("connection_params", {}).get(connection_group, {}).get(name)
+        # Support two possible shapes in stored params:
+        # 1) connection parameters nested under "connection_params":
+        #    { "connection_params": { "DistGraspHandConnection": { ... } } }
+        # 2) connection parameters stored at top-level keyed by connection group:
+        #    { "DistGraspHandConnection": { ... } }
+        val = None
+        try:
+            val = params.get("connection_params", {}).get(connection_group, {}).get(name)
+        except Exception:
+            val = None
+        if val is None:
+            try:
+                val = params.get(connection_group, {}).get(name)
+            except Exception:
+                val = None
+        return val
     return params.get(group, {}).get(name)
 
 
@@ -100,6 +115,21 @@ def read_results_from_db(db_path: Path):
                     baseline_params = json.loads(params_json)
                 except Exception:
                     baseline_params = None
+                else:
+                    # Debug: print connection_params keys and the DistGraspHandConnection dict
+                    try:
+                        if isinstance(baseline_params, dict):
+                            conn_params = baseline_params.get("connection_params")
+                            conn_keys = list(conn_params.keys()) if isinstance(conn_params, dict) else None
+                            print(f"DEBUG connection_params keys: {conn_keys}")
+                            if isinstance(conn_params, dict) and "DistGraspHandConnection" in conn_params:
+                                print("DEBUG DistGraspHandConnection:")
+                                try:
+                                    print(json.dumps(conn_params["DistGraspHandConnection"], indent=2))
+                                except Exception:
+                                    print(conn_params["DistGraspHandConnection"])
+                    except Exception:
+                        pass
             baseline_trials.append({"success": bool(success_val), "timesteps": timesteps})
             continue
 
@@ -107,6 +137,13 @@ def read_results_from_db(db_path: Path):
             group, name = parameter.rsplit('.', 1)
         else:
             group, name = "", parameter
+
+        # Handle connection parameters that use a slash between connection group and param,
+        # e.g. "connection.DistGraspHandConnection/uncertainty_dist_threshold"
+        if group == "connection" and "/" in name:
+            conn_group, param_name = name.split("/", 1)
+            group = f"connection.{conn_group}"
+            name = param_name
 
         if sweep_value is None and label == "standard":
             sweep_value = metadata.get("standard_value")
@@ -119,6 +156,29 @@ def read_results_from_db(db_path: Path):
         all_groups = {(r["group"], r["name"]) for r in rows if not (r["group"] == "standard" and r["name"] == "standard")}
         for group, name in all_groups:
             baseline_value = _extract_baseline_value(baseline_params, group, name)
+            print(f"Baseline value for {group}/{name}: {baseline_value}")
+            # If baseline missing for connection params, try a fallback: find any config
+            # that contains the connection group and use its value as a sensible default.
+            if baseline_value is None and group.startswith("connection."):
+                try:
+                    _, conn_group = group.split('.', 1)
+                    # search configs table for any params containing the connection group
+                    cur.execute("SELECT params FROM configs WHERE params LIKE ? LIMIT 1", (f"%{conn_group}%",))
+                    row = cur.fetchone()
+                    if row:
+                        try:
+                            cand = json.loads(row[0])
+                            # try both shapes
+                            if isinstance(cand, dict):
+                                baseline_value = cand.get("connection_params", {}).get(conn_group, {}).get(name)
+                                if baseline_value is None:
+                                    baseline_value = cand.get(conn_group, {}).get(name)
+                                if baseline_value is not None:
+                                    print(f"DEBUG fallback baseline from configs for {group}/{name}: {baseline_value}")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             if baseline_value is None:
                 continue
             for trial in baseline_trials:
@@ -203,7 +263,11 @@ def aggregate(rows):
             "timesteps_mat": timesteps_mat,
             "counts": counts,
             "importances": importances,
+            "group_importance": float(np.nanmean(importances)) if np.any(~np.isnan(importances)) else float('nan'),
         }
+
+    # sort groups by importance descending
+    result = dict(sorted(result.items(), key=lambda item: item[1]["group_importance"] if not math.isnan(item[1]["group_importance"]) else -math.inf, reverse=True))
     return result
 
 
@@ -274,12 +338,94 @@ def plot_group_heatmap(group_key, group_data, out_dir: Path, metric: str = "succ
     return out_file
 
 
+def plot_combined_heatmap(agg, out_dir: Path, metric: str = "success", annotate: bool = True):
+    all_labels =['negative', 'zero', 'x0.001','x0.2','x0.5','standard','x2','x5','x1000']
+    print(all_labels)
+    if not all_labels:
+        return None
+
+    row_labels = []
+    label_index = {label: idx for idx, label in enumerate(all_labels)}
+    total_rows = sum(len(data["names"]) for data in agg.values())
+    mat = np.full((total_rows, len(all_labels)), np.nan)
+    counts = np.zeros((total_rows, len(all_labels)), dtype=int)
+    group_boundaries = []
+    row_to_group = []
+
+    row = 0
+    for group_key, group_data in agg.items():
+        group_boundaries.append(row)
+        source_mat = group_data["success_mat"] if metric == "success" else group_data["timesteps_mat"]
+        source_counts = group_data["counts"]
+        for local_row, name in enumerate(group_data["names"]):
+            row_labels.append(f"{group_key}/{name}")
+            row_to_group.append(group_key)
+            for label, j in label_index.items():
+                if label in group_data["labels"]:
+                    label_idx = group_data["labels"].index(label)
+                    if label_idx < source_mat.shape[1]:
+                        mat[row, j] = source_mat[local_row, label_idx]
+                        counts[row, j] = source_counts[local_row, label_idx]
+            row += 1
+
+    if mat.size == 0:
+        return None
+
+    if metric == "success":
+        cmap = plt.get_cmap("RdYlGn")
+        colorbar_label = "Success rate"
+        title_metric = "Success Rate"
+        vmin, vmax = 0, 1
+    else:
+        cmap = plt.get_cmap("YlGnBu")
+        colorbar_label = "Average timesteps"
+        title_metric = "Average Timesteps"
+        vmin, vmax = 0, 1000
+
+    plt.figure(figsize=(max(8, len(all_labels)*0.5), max(6, total_rows*0.25)))
+    masked = np.ma.masked_invalid(mat)
+    im = plt.imshow(masked, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax)
+    plt.colorbar(im, label=colorbar_label)
+    y_positions = np.arange(len(row_labels))
+    plt.yticks(y_positions, row_labels)
+    plt.xticks(range(len(all_labels)), all_labels, rotation=45, ha="right")
+    plt.xlabel("Sweep label")
+    plt.ylabel("Group/Param name")
+    plt.title(f"{title_metric} for all groups")
+
+    for boundary in group_boundaries[1:]:
+        plt.axhline(boundary - 0.5, color='black', linewidth=0.5)
+
+    if annotate:
+        for i in range(mat.shape[0]):
+            for j in range(mat.shape[1]):
+                val = mat[i, j]
+                if math.isnan(val):
+                    txt = "-"
+                    plt.text(j, i, txt, ha='center', va='center', color='gray', fontsize=6)
+                else:
+                    if metric == "success":
+                        txt = f"{val:.2f}\n({counts[i,j]})"
+                    else:
+                        txt = f"({counts[i,j]})"
+                    color = 'black' if val < (0.5 if metric == "success" else (vmin + vmax) / 2) else 'white'
+                    plt.text(j, i, txt, ha='center', va='center', color=color, fontsize=6)
+
+    safe_name = "all_groups"
+    out_file = out_dir / f"heatmap_{safe_name}_{metric}.png"
+    plt.tight_layout()
+    plt.savefig(out_file)
+    plt.close()
+    return out_file
+
+
 def main():
     parser = argparse.ArgumentParser(description="Create heatmaps per param_group (param_name x sweep_label).")
     parser.add_argument('--results-dir', default='results', help='Results CSV folder')
     parser.add_argument('--db-path', default='', help='SQLite experiment database path to read results from')
     parser.add_argument('--output-dir', default='heatmaps', help='Output folder for heatmaps')
     parser.add_argument('--metric', choices=['success', 'timesteps', 'both'], default='both', help='Which metric to plot')
+    parser.add_argument('--combined', action='store_true', help='Create a single heatmap that includes all groups in one figure')
     parser.add_argument('--no-annotate', action='store_true', help='Do not write text annotations in cells')
     args = parser.parse_args()
 
@@ -300,11 +446,17 @@ def main():
 
     metrics = ['success', 'timesteps'] if args.metric == 'both' else [args.metric]
     created = []
-    for g, d in agg.items():
+    if args.combined:
         for metric in metrics:
-            f = plot_group_heatmap(g, d, out_dir, metric=metric, annotate=not args.no_annotate)
+            f = plot_combined_heatmap(agg, out_dir, metric=metric, annotate=not args.no_annotate)
             if f:
                 created.append(str(f))
+    else:
+        for g, d in agg.items():
+            for metric in metrics:
+                f = plot_group_heatmap(g, d, out_dir, metric=metric, annotate=not args.no_annotate)
+                if f:
+                    created.append(str(f))
 
     print(f"Wrote {len(created)} heatmaps to {out_dir}")
 

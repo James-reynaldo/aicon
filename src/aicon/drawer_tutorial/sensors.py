@@ -121,7 +121,13 @@ class BearingSensor(SensorComponent):
                  device: Union[torch.device, None] = None, mockbuild: bool = False, sim_env_pointer = None,
                 noise_level: float = 0.005, noise_scale: float = 0.0):
         self.sim_env_pointer = sim_env_pointer
-        self.H_ee_to_cam = torch.eye(4, dtype=dtype or torch.float64, device=device or torch.device("cpu"))
+        self.H_ee_to_cam = torch.tensor([
+            [1., 0., 0., -0.08],
+            [0.,  1., 0., 0.],
+            [0.,  0., 1., 0.],
+            [0.,  0., 0., 1.],
+        ], dtype=dtype or torch.float64,
+        device=device or torch.device("cpu"))
         self.noise_scale = noise_scale
         self.noise_level = noise_level
         super().__init__(name, connections, dtype, device, mockbuild=mockbuild)

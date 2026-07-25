@@ -67,8 +67,8 @@ def read_results_from_db(db_path: Path):
     rows = []
     conn = sqlite3.connect(str(db_path))
     cur = conn.cursor()
-    cur.execute("SELECT t.metadata, t.success FROM trials t")
-    for metadata_json, success_val in cur.fetchall():
+    cur.execute("SELECT t.metadata, t.success, t.timesteps, t.error, t.anchor_error, t.kinematic_axis_error FROM trials t")
+    for metadata_json, success_val, timesteps_val, error_val, anchor_err_val, kinematic_err_val in cur.fetchall():
         try:
             metadata = json.loads(metadata_json) if metadata_json else {}
         except Exception:
@@ -87,13 +87,17 @@ def read_results_from_db(db_path: Path):
             "param_name": name,
             "sweep_label": label,
             "success": success,
+            "timesteps": timesteps_val,
+            "error": error_val,
+            "anchor_error": anchor_err_val,
+            "kinematic_axis_error": kinematic_err_val,
         })
 
     conn.close()
     return rows
 
 
-def build_summary(rows, sweep_label="negative"):
+def build_summary(rows, sweep_label="negative", metric="success_rate"):
     # Filter rows based on sweep_label
     if sweep_label == "all":
         # Include negative, zero, and positive sweeps together.
@@ -105,37 +109,78 @@ def build_summary(rows, sweep_label="negative"):
         # For "negative" or "zero", filter exactly
         filtered_rows = [row for row in rows if row.get("sweep_label") == sweep_label]
     
-    # Group by param_group -> param_name -> sweep_value_label -> list of 0/1 successes
+    # Group by param_group -> param_name -> sweep_value_label -> list of rows
     grouped = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     for row in filtered_rows:
         param_group = row.get("param_group", "")
         param_name = row["param_name"]
         sweep_val = row.get("sweep_label", "")
-        grouped[param_group][param_name][sweep_val].append(1 if row["success"] else 0)
+        grouped[param_group][param_name][sweep_val].append(row)
 
     summary = {}
+    # For each parameter, compute metric per sweep label then aggregate (mean+var)
     for param_group, param_dict in grouped.items():
         summary[param_group] = []
         for param_name, sweep_map in param_dict.items():
-            # compute success rate per sweep-value, then mean+var over those rates
-            rates = []
-            for sweep_val, trials in sweep_map.items():
-                if not trials:
-                    continue
-                rate = float(np.sum(trials)) / float(len(trials))
-                rates.append(rate)
+            # compute per-sweep_value metric values
+            vals = []
+            standard_vals = sweep_map.get("standard", [])
+            # compute standard metric value to include for comparison when available
+            standard_value = None
+            if standard_vals:
+                if metric == "success_rate":
+                    standard_value = float(np.sum([1 if r.get("success") else 0 for r in standard_vals])) / float(len(standard_vals))
+                elif metric == "avg_anchor_error":
+                    anchor_errors = [r.get("anchor_error") for r in standard_vals if r.get("anchor_error") is not None]
+                    standard_value = float(np.mean(anchor_errors)) if anchor_errors else None
+                elif metric == "avg_timesteps":
+                    success_timesteps = [r.get("timesteps") for r in standard_vals if r.get("success") and r.get("timesteps") is not None]
+                    standard_value = float(np.mean(success_timesteps)) if success_timesteps else None
+                elif metric == "avg_kinematic_axis_error":
+                    kinematic_errors = [r.get("kinematic_axis_error") for r in standard_vals if r.get("success") and r.get("kinematic_axis_error") is not None]
+                    standard_value = float(np.mean(kinematic_errors)) if kinematic_errors else None
+                elif metric == "avg_error":
+                    errors = [r.get("error") for r in standard_vals if r.get("success") and r.get("error") is not None]
+                    standard_value = float(np.mean(errors)) if errors else None
 
-            if rates:
-                mean = float(np.mean(rates))
-                var = float(np.var(rates))
-                count = len(rates)
+            for sweep_val, rows_list in sweep_map.items():
+                if not rows_list:
+                    continue
+                if metric == "success_rate":
+                    rate = float(np.sum([1 if r.get("success") else 0 for r in rows_list])) / float(len(rows_list))
+                    vals.append(rate)
+                elif metric == "avg_anchor_error":
+                    anchor_errors = [r.get("anchor_error") for r in rows_list if r.get("success") and r.get("anchor_error") is not None]
+                    if anchor_errors:
+                        vals.append(float(np.mean(anchor_errors)))
+                elif metric == "avg_timesteps":
+                    success_timesteps = [r.get("timesteps") for r in rows_list if r.get("success") and r.get("timesteps") is not None]
+                    if success_timesteps:
+                        vals.append(float(np.mean(success_timesteps)))
+                elif metric == "avg_kinematic_axis_error":
+                    kinematic_errors = [r.get("kinematic_axis_error") for r in rows_list if r.get("success") and r.get("kinematic_axis_error") is not None]
+                    if kinematic_errors:
+                        vals.append(float(np.mean(kinematic_errors)))
+                elif metric == "avg_error":
+                    errors = [r.get("error") for r in rows_list if r.get("success") and r.get("error") is not None]
+                    if errors:
+                        vals.append(float(np.mean(errors)))
+
+            # include standard value if present
+            if standard_value is not None:
+                vals.append(standard_value)
+
+            if vals:
+                mean = float(np.mean(vals))
+                var = float(np.var(vals))
+                count = len(vals)
             else:
                 mean = 0.0
                 var = 0.0
                 count = 0
 
-            # store (param_name, mean, variance, count_of_sweep_values)
-            summary[param_group].append((param_name, mean, var, count))
+            if param_group != "standard":
+                summary[param_group].append((param_name, mean, var, count))
 
         # Sort by mean success rate (ascending)
         summary[param_group].sort(key=lambda x: x[1])
@@ -143,7 +188,7 @@ def build_summary(rows, sweep_label="negative"):
     return summary
 
 
-def plot_summary(summary_normal, summary_noise, summary_disturbance, output_dir: Path, sweep_label="negative"):
+def plot_summary(summary_normal, summary_noise, summary_disturbance, output_dir: Path, sweep_label="negative", metric="success_rate"):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if summary_normal is None:
@@ -175,12 +220,15 @@ def plot_summary(summary_normal, summary_noise, summary_disturbance, output_dir:
             label="Normal",
         )
 
-        # Shade variance for positive sweep
-        if sweep_label == "positive":
-            stds = np.sqrt(np.array(normal_vars))
+        # Shade variance for the plotted metric
+        stds = np.sqrt(np.array(normal_vars))
+        if metric == "success_rate":
             lower = np.clip(np.array(normal_rates) - stds, 0.0, 1.0)
             upper = np.clip(np.array(normal_rates) + stds, 0.0, 1.0)
-            plt.fill_between(x, lower, upper, color="steelblue", alpha=0.15)
+        else:
+            lower = np.array(normal_rates) - stds
+            upper = np.array(normal_rates) + stds
+        plt.fill_between(x, lower, upper, color="steelblue", alpha=0.15, label="±1 std")
 
         # Plot noise on same x-axis
         if summary_noise is not None and param_group in summary_noise:
@@ -210,11 +258,15 @@ def plot_summary(summary_normal, summary_noise, summary_disturbance, output_dir:
                     linewidth=2,
                     label="Noise",
                 )
-                if sweep_label == "positive":
+                if nvar:
                     nstd = np.sqrt(np.array(nvar))
-                    lower = np.clip(np.array(ny) - nstd, 0.0, 1.0)
-                    upper = np.clip(np.array(ny) + nstd, 0.0, 1.0)
-                    plt.fill_between(list(nx), lower, upper, color="orange", alpha=0.12)
+                    if metric == "success_rate":
+                        lower = np.clip(np.array(ny) - nstd, 0.0, 1.0)
+                        upper = np.clip(np.array(ny) + nstd, 0.0, 1.0)
+                    else:
+                        lower = np.array(ny) - nstd
+                        upper = np.array(ny) + nstd
+                    plt.fill_between(list(nx), lower, upper, color="orange", alpha=0.18, label="Noise ±1 std")
 
         # Plot disturbance on same x-axis
         if summary_disturbance is not None and param_group in summary_disturbance:
@@ -243,23 +295,24 @@ def plot_summary(summary_normal, summary_noise, summary_disturbance, output_dir:
                     linewidth=2,
                     label="Disturbance",
                 )
-                if sweep_label == "positive":
+                if dvar:
                     dstd = np.sqrt(np.array(dvar))
-                    lower = np.clip(np.array(dy) - dstd, 0.0, 1.0)
-                    upper = np.clip(np.array(dy) + dstd, 0.0, 1.0)
-                    plt.fill_between(list(dx), lower, upper, color="green", alpha=0.12)
-
-        plt.title(f"Success Rate by Parameter ({sweep_label.capitalize()} Sweep) - {param_group}")
-        plt.xlabel("Parameter Name")
-        plt.ylabel("Success Rate")
-        plt.grid(True, linestyle="--", alpha=0.5, axis="y")
-        plt.ylim(0, 1.05)
+                    if metric == "success_rate":
+                        lower = np.clip(np.array(dy) - dstd, 0.0, 1.0)
+                        upper = np.clip(np.array(dy) + dstd, 0.0, 1.0)
+                    else:
+                        lower = np.array(dy) - dstd
+                        upper = np.array(dy) + dstd
+                    plt.fill_between(list(dx), lower, upper, color="green", alpha=0.16, label="Disturbance ±1 std")
+        # plt.ylim(0, 1.05)
+        #Make adjustable YLim
+        # plt.ylim(bottom=0)
         plt.xticks(x, param_names, rotation=45, ha="right")
         plt.legend()
         plt.tight_layout()
 
         safe_name = param_group.replace("/", "_").replace(" ", "_")
-        output_file = output_dir / f"success_rate_{sweep_label}_{safe_name}.png"
+        output_file = output_dir / f"{metric}_{sweep_label}_{safe_name}.png"
         plt.savefig(output_file)
         plt.close()
 
@@ -310,6 +363,7 @@ def plot_combined_summary(
     summary_disturbance,
     output_dir: Path,
     sweep_label="negative",
+    metric="success_rate",
     stable_normal=None,
     stable_noise=None,
     stable_disturbance=None,
@@ -356,11 +410,15 @@ def plot_combined_summary(
         color="steelblue",
         label="Normal",
     )
-    if sweep_label == "positive":
+    if success_vars:
         stds = np.sqrt(np.array(success_vars))
-        lower = np.clip(np.array(success_rates) - stds, 0.0, 1.0)
-        upper = np.clip(np.array(success_rates) + stds, 0.0, 1.0)
-        plt.fill_between(x, lower, upper, color="steelblue", alpha=0.12)
+        if metric == "success_rate":
+            lower = np.clip(np.array(success_rates) - stds, 0.0, 1.0)
+            upper = np.clip(np.array(success_rates) + stds, 0.0, 1.0)
+        else:
+            lower = np.array(success_rates) - stds
+            upper = np.array(success_rates) + stds
+        plt.fill_between(x, lower, upper, color="steelblue", alpha=0.15, label="Normal ±1 std")
     stable_normal = stable_normal or set()
     stable_noise = stable_noise or set()
     stable_disturbance = stable_disturbance or set()
@@ -435,11 +493,15 @@ def plot_combined_summary(
                 color="orange",
                 label="Noise",
             )
-            if sweep_label == "positive":
+            if nvar:
                 nstd = np.sqrt(np.array(nvar))
-                lower = np.clip(np.array(ny) - nstd, 0.0, 1.0)
-                upper = np.clip(np.array(ny) + nstd, 0.0, 1.0)
-                plt.fill_between(list(nx), lower, upper, color="orange", alpha=0.10)
+                if metric == "success_rate":
+                    lower = np.clip(np.array(ny) - nstd, 0.0, 1.0)
+                    upper = np.clip(np.array(ny) + nstd, 0.0, 1.0)
+                else:
+                    lower = np.array(ny) - nstd
+                    upper = np.array(ny) + nstd
+                plt.fill_between(list(nx), lower, upper, color="orange", alpha=0.12, label="Noise ±1 std")
         if stable_noise_x:
             plt.plot(
                 stable_noise_x,
@@ -484,11 +546,15 @@ def plot_combined_summary(
                 color="green",
                 label="Disturbance",
             )
-            if sweep_label == "positive":
+            if dvar:
                 dstd = np.sqrt(np.array(dvar))
-                lower = np.clip(np.array(dy) - dstd, 0.0, 1.0)
-                upper = np.clip(np.array(dy) + dstd, 0.0, 1.0)
-                plt.fill_between(list(dx), lower, upper, color="green", alpha=0.10)
+                if metric == "success_rate":
+                    lower = np.clip(np.array(dy) - dstd, 0.0, 1.0)
+                    upper = np.clip(np.array(dy) + dstd, 0.0, 1.0)
+                else:
+                    lower = np.array(dy) - dstd
+                    upper = np.array(dy) + dstd
+                plt.fill_between(list(dx), lower, upper, color="green", alpha=0.10, label="Disturbance ±1 std")
         if stable_disturbance_x:
             plt.plot(
                 stable_disturbance_x,
@@ -503,11 +569,19 @@ def plot_combined_summary(
                 label="_nolegend_",
             )
 
-    plt.title(f"Success Rate by All Parameters ({sweep_label.capitalize()} Sweep) - Combined")
+    title_map = {
+        "success_rate": "Success Rate",
+        "avg_timesteps": "Average Timesteps (successes)",
+        "avg_error": "Average Error",
+        "avg_anchor_error": "Average Anchor Error",
+        "avg_kinematic_axis_error": "Average Kinematic Axis Error",
+    }
+    ylabel = title_map.get(metric, metric)
+    plt.title(f"{ylabel} by All Parameters ({sweep_label.capitalize()} Sweep) - Combined")
     plt.xlabel("Parameter Name")
-    plt.ylabel("Success Rate")
+    plt.ylabel(ylabel)
     plt.grid(True, linestyle="--", alpha=0.5, axis="y")
-    plt.ylim(0, 1.05)
+    # plt.ylim(bottom=0)
     
     # Identify parameters with above-average standard deviations (for positive sweep)
     high_std_params = set()
@@ -643,7 +717,7 @@ def plot_combined_summary(
     ax.legend(handles=group_legend, loc="upper right", title="Parameter Groups")
     
     plt.tight_layout()
-    output_file = output_dir / f"success_rate_{sweep_label}_combined.png"
+    output_file = output_dir / f"{metric}_{sweep_label}_combined.png"
     plt.savefig(output_file)
     plt.close()
 
@@ -676,6 +750,12 @@ def main():
         default="negative",
         help="Which sweep values to analyze: negative, zero, positive, or all.",
     )
+    parser.add_argument(
+        "--metric",
+        choices=["success_rate", "avg_timesteps", "avg_error", "avg_anchor_error", "avg_kinematic_axis_error"],
+        default="success_rate",
+        help="Metric to compute and plot.",
+    )
     args = parser.parse_args()
 
     all_rows_normal = []
@@ -695,9 +775,9 @@ def main():
     #     for csv_path in csv_files:
     #         all_rows.extend(read_results(csv_path))
 
-    summary_normal = build_summary(all_rows_normal, sweep_label=args.sweep_label)
-    summary_noise = build_summary(all_rows_noise, sweep_label=args.sweep_label)
-    summary_disturbance = build_summary(all_rows_disturbance, sweep_label=args.sweep_label)
+    summary_normal = build_summary(all_rows_normal, sweep_label=args.sweep_label, metric=args.metric)
+    summary_noise = build_summary(all_rows_noise, sweep_label=args.sweep_label, metric=args.metric)
+    summary_disturbance = build_summary(all_rows_disturbance, sweep_label=args.sweep_label, metric=args.metric)
     if not summary_normal:
         raise SystemExit("No valid rows found to plot.")
 
@@ -707,44 +787,47 @@ def main():
     if args.sweep_label == "all":
         stable_normal = find_stable_all_points(
             summary_normal,
-            build_summary(all_rows_normal, sweep_label="negative"),
-            build_summary(all_rows_normal, sweep_label="zero"),
-            build_summary(all_rows_normal, sweep_label="positive"),
+            build_summary(all_rows_normal, sweep_label="negative", metric=args.metric),
+            build_summary(all_rows_normal, sweep_label="zero", metric=args.metric),
+            build_summary(all_rows_normal, sweep_label="positive", metric=args.metric),
         )
         stable_noise = find_stable_all_points(
             summary_noise,
-            build_summary(all_rows_noise, sweep_label="negative"),
-            build_summary(all_rows_noise, sweep_label="zero"),
-            build_summary(all_rows_noise, sweep_label="positive"),
+            build_summary(all_rows_noise, sweep_label="negative", metric=args.metric),
+            build_summary(all_rows_noise, sweep_label="zero", metric=args.metric),
+            build_summary(all_rows_noise, sweep_label="positive", metric=args.metric),
         )
         stable_disturbance = find_stable_all_points(
             summary_disturbance,
-            build_summary(all_rows_disturbance, sweep_label="negative"),
-            build_summary(all_rows_disturbance, sweep_label="zero"),
-            build_summary(all_rows_disturbance, sweep_label="positive"),
+            build_summary(all_rows_disturbance, sweep_label="negative", metric=args.metric),
+            build_summary(all_rows_disturbance, sweep_label="zero", metric=args.metric),
+            build_summary(all_rows_disturbance, sweep_label="positive", metric=args.metric),
         )
 
+    # output folder includes metric name
+    metric_suffix = args.metric
     if args.sweep_label == "positive":
-        out_dir = Path.cwd() / "Success_rate_comparison_plots_positive"
+        out_dir = Path.cwd() / f"{metric_suffix}_comparison_plots_positive"
     elif args.sweep_label == "zero":
-        out_dir = Path.cwd() / "Success_rate_comparison_plots_zero"
+        out_dir = Path.cwd() / f"{metric_suffix}_comparison_plots_zero"
     elif args.sweep_label == "all":
-        out_dir = Path.cwd() / "Success_rate_comparison_plots_all"
+        out_dir = Path.cwd() / f"{metric_suffix}_comparison_plots_all"
     else:
-        out_dir = Path.cwd() / "Success_rate_comparison_plots_negative"
+        out_dir = Path.cwd() / f"{metric_suffix}_comparison_plots_negative"
 
-    plot_summary(summary_normal, summary_noise, summary_disturbance, out_dir, sweep_label=args.sweep_label)
+    plot_summary(summary_normal, summary_noise, summary_disturbance, out_dir, sweep_label=args.sweep_label, metric=args.metric)
     plot_combined_summary(
         summary_normal,
         summary_noise,
         summary_disturbance,
         out_dir,
         sweep_label=args.sweep_label,
+        metric=args.metric,
         stable_normal=stable_normal,
         stable_noise=stable_noise,
         stable_disturbance=stable_disturbance,
     )
-    print(f"Saved plots for {len(summary_normal)} parameter groups ({args.sweep_label}) to {out_dir}")
+    print(f"Saved plots for {len(summary_normal)} parameter groups ({args.sweep_label}, metric={args.metric}) to {out_dir}")
 
 
 if __name__ == "__main__":

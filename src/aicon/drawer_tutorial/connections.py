@@ -122,9 +122,9 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             uncertainty_dist_threshold: float = 0.4,
             small_likelihood_value: float = 1e-8,
             uncertainty_bias: float = 0.2,
-            uncertainty_scale_uncertainty: float = 3.0,
-            uncertainty_scale_relevance: float = 5.0,
-            dist_sigmoid_scale: float = 5.0,
+            uncertainty_scale_uncertainty: float = 5.0,
+            uncertainty_scale_relevance: float = 20.0,
+            dist_sigmoid_scale: float = 10.0,
             time_since_hand_change_threshold: float = 1.0,
             ft_tresh_multiplier: float = 6.0,
             ft_tresh_cap: float = 6.0):
@@ -157,7 +157,7 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             )
             innovation_from_uncertainty = likelihood_given_uncertainty - likelihood_grasped_drawer
 
-            print(f"dist_sigmoid_scale: {self.dist_sigmoid_scale}")
+            # print(f"dist_sigmoid_scale: {self.dist_sigmoid_scale}")
 
             dist_relevance = (
                 1 - torch.sigmoid((distance_ee_drawer[1] - 0.5) * self.dist_sigmoid_scale)
@@ -224,7 +224,13 @@ class VisibleEEDrawerConnection(ActiveInterconnection):
             H_ee_to_cam = H_ee_to_cam_result.to(dtype=self.dtype, device=self.device)
         except (AssertionError, AttributeError):
             print("Fallback on saved transform")
-            H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
+            H_ee_to_cam = torch.tensor([
+                [1., 0., 0., -0.08],
+                [0.,  1., 0., 0.],
+                [0.,  0., 1., 0.],
+                [0.,  0., 0., 1.],
+            ], dtype=self.dtype,
+            device=self.device)
 
         def connection_func(likelihood_visible_drawer, pose_ee, position_drawer):
             position_drawer_mod = torch.tensor(
@@ -255,7 +261,13 @@ class DrawerCameraEEConnection(ActiveInterconnection):
             H_ee_to_cam = H_ee_to_cam_result.to(dtype=self.dtype, device=self.device)
         except (AssertionError, AttributeError):
             print("Fallback on saved transform")
-            H_ee_to_cam = torch.eye(4, dtype=self.dtype, device=self.device)
+            H_ee_to_cam = torch.tensor([
+                [1., 0., 0., -0.08],
+                [0.,  1., 0., 0.],
+                [0.,  0., 1., 0.],
+                [0.,  0., 0., 1.],
+            ], dtype=self.dtype,
+            device=self.device)
 
         def connection_func(position_drawer, pose_ee, relative_position_in_CF_drawer):
             # experiment-only: force the drawer position used by the visual residual

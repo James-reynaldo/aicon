@@ -88,6 +88,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                             #     mockbuild=mockbuild)},                        
                                                                         device=torch.device("cpu"),
                                                                         dtype=torch.double, mockbuild=mockbuild,
+                                                                        sim_env_pointer=sim_env_pointer,
                                                                         **estimator_params.get("drawer_position", {}),
                                                                         ),
         "DistanceEstimator": lambda mockbuild: DistEEDrawerEstimator("DistanceEstimator",

@@ -95,10 +95,10 @@ def likelihood_func_visible(pose_ee: torch.Tensor, position_drawer: torch.Tensor
     # 0.6 = 69.4 / 180 * PI / 2.0 with 69.4° FOV in x
     # 0.37 = 42.5 / 180 * PI / 2.0 with 42.5° FOV in y
     # clipping 0.1 above to not go into 0 area of the error function
-    angle_x = gradient_preserving_clipping(angle_x, 0.0, 0.8)
-    likelihood_x = 0.5 - 0.5 * torch.erf((angle_x - 0.6) * steepness)
-    angle_y = gradient_preserving_clipping(angle_y, 0.0, 0.57)
-    likelihood_y = 0.5 - 0.5 * torch.erf((angle_y - 0.37) * steepness)
+    angle_x = gradient_preserving_clipping(angle_x, 0.0, 0.57)
+    likelihood_x = 0.5 - 0.5 * torch.erf((angle_x - 0.37) * steepness)
+    angle_y = gradient_preserving_clipping(angle_y, 0.0, 0.8)
+    likelihood_y = 0.5 - 0.5 * torch.erf((angle_y - 0.6) * steepness)
     likelihood = likelihood_x * likelihood_y
     # print(f"util angle_x: {angle_x}, likelihood_x: {likelihood_x}")
     # print(f"util angle_y: {angle_y}, likelihood_y: {likelihood_y}")

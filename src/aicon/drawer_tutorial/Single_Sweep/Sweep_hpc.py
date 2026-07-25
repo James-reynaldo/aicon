@@ -18,23 +18,20 @@ RANDOM_INIT_TIME = 0  # seconds of random movement at start
 MAX_TIMESTEPS = 1000
 
 Visible_Initial_qpos_list = [
-    np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]), #visible
-    np.array([-0.57252049,  0.47811905,  0.10284968, -2.0172723,   1.15352072,  1.42225441,  -0.17381949]), #visible
-    np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]), #visible
-    np.array([-0.55045225,  0.45672133,  0.18660044, -2.06409333,  1.23236357,  1.52805897,  -0.16151129]), #visible
-    np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]) #visible
+np.array([-0.60657486,  0.55208371,  0.01406207, -1.88856343,  1.09944793,  1.29935419,  -0.16385514]), #visible
+np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]), #visible
+np.array([-0.60706375,  0.34607402,  0.09003703, -2.08550184,  1.2520165,   1.49328103,  -0.08097987]), #visible problem too close
+np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]), #visible
+np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]), # invisible
 ]
 
-
 Invisible_Initial_qpos_list = [
-np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32]),
+np.array([-0.48750612,  1.17415488,  0.19242183, -1.14334887,  1.13314345,  1.47119768,  0.04283408]),
 np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]), # invisible
 np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]), # invisible at first
 np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]), # invisible
-np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]) # invisible
+np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]), #visible
 ]
-
-
 # reuse your existing functions (copy them from current file)
 from aicon.drawer_tutorial.Sweep import (
     get_default_estimator_params,
@@ -101,7 +98,7 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
     job_metadata.update(job.get("metadata", {}))
 
     try:
-        for run in range(NUM_TRIALS_PER_JOB):
+        for run in range(NUM_TRIALS_PER_JOB): #5,6,9
             if run < len(Visible_Initial_qpos_list):
                 initial_panda_qpos = Visible_Initial_qpos_list[run]
             else:

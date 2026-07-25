@@ -13,6 +13,7 @@ from robosuite.utils.transform_utils import quat2mat
 from robosuite.wrappers import VisualizationWrapper
 
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion, OPEN_VALUE
+from aicon.drawer_tutorial.util import pose_vec_to_homogeneous
 
 RENDER = False  # Set to True to visualize the environment
 
@@ -39,21 +40,27 @@ KINEMATIC_DRAWER_INDICATOR = "kinematic_joint_drawer_position"
 KINEMATIC_DRAWER_INITIAL = "kinematic_joint_drawer_initial_position"
 EE_POS_INDICATOR = "ee_position"
 DRAWER_POSITION_INDICATOR = "drawer_position"
+CAMERA_ORIGIN_INDICATOR = "ee_to_camera_origin"
+CAMERA_FORWARD_INDICATOR = "ee_to_camera_forward"
+CAMERA_FORWARD_LENGTH = 0.18
 
 
 # Visible
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]) #visible
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.57252049,  0.47811905,  0.10284968, -2.0172723,   1.15352072,  1.42225441,  -0.17381949]) #visible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.60657486,  0.55208371,  0.01406207, -1.88856343,  1.09944793,  1.29935419,  -0.16385514]) #visible
 DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]) #visible
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.54045225,  0.45672133,  0.18660044, -2.06409333,  1.23236357,  1.52805897,  -0.16151129]) #visible
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]) #visible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.55706375,  0.34607402,  0.19003703, -2.08550184,  1.2520165,   1.49328103,  -0.08097987]) #visible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]) #visible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]) # invisible
 
-# Invisible
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.56, 0.76, 0.1, -1.90, 1.11, 1.5, -0.32])
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]) # invisible
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]) # invisible at first
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]) # invisible
-# DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]) # invisible
+
+# # Invisible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.48750612,  1.17415488,  0.19242183, -1.14334887,  1.13314345,  1.47119768,  0.04283408])
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]) # invisible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]) # invisible at first
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]) # invisible
+DEFAULT_INITIAL_PANDA_QPOS = np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]) #visible
+
+
 
 class GraspDiagnosticsPlotter:
     """Display the grasp-likelihood inputs and their decision thresholds live."""
@@ -431,6 +438,43 @@ class EEPosVisualizer:
 
         self.base_env.sim.forward()
 
+
+class EECameraTransformVisualizer:
+    """Show the camera pose defined by ``H_ee_to_cam`` in the MuJoCo scene.
+
+    The red rod starts at the camera origin and follows the camera frame's
+    positive z-axis, which is the forward / viewing direction used by the
+    projective-geometry calculations.
+    """
+
+    def __init__(self, env, bearing_sensor):
+        self.env = env
+        self.base_env = env.env if hasattr(env, "env") else env
+        self.bearing_sensor = bearing_sensor
+
+    def update(self):
+        # H_ee_to_cam maps camera-frame points into the end-effector frame, so
+        # composing it with the current world-from-EE pose gives the camera pose
+        # in the renderer's world frame.
+        ee_pose = torch.as_tensor(
+            self.base_env.get_ee_pose(),
+            dtype=self.bearing_sensor.H_ee_to_cam.dtype,
+            device=self.bearing_sensor.H_ee_to_cam.device,
+        )
+        H_world_to_cam = pose_vec_to_homogeneous(ee_pose) @ self.bearing_sensor.H_ee_to_cam
+        camera_origin = H_world_to_cam[:3, 3].detach().cpu().numpy()
+        forward = H_world_to_cam[:3, 2].detach().cpu().numpy()
+        forward /= np.linalg.norm(forward)
+
+        self.env.set_indicator_pos(CAMERA_ORIGIN_INDICATOR, camera_origin)
+        self.env.set_indicator_pos(
+            CAMERA_FORWARD_INDICATOR,
+            camera_origin + forward * (CAMERA_FORWARD_LENGTH / 2),
+        )
+        rod_body_id = self.base_env.sim.model.body_name2id(CAMERA_FORWARD_INDICATOR + "_body")
+        self.base_env.sim.model.body_quat[rod_body_id] = KinematicJointVisualizer._z_axis_quaternion(forward)
+        self.base_env.sim.forward()
+
 class DrawerPositionVisualizer:
     """Draw the estimated drawer pos as a sphere."""
 
@@ -449,7 +493,8 @@ class DrawerPositionVisualizer:
 
 def create_demo_visualizers(env, components, visualize_kinematic_angles=True,
                             visualize_ee=True, visualize_grasp_diagnostics=True,
-                            visualize_drawer_position=True, visualize_gradient_trace=True):
+                            visualize_drawer_position=True, visualize_gradient_trace=True,
+                            visualize_camera_transform=True):
     """Create the optional visualizations shared by the demo and sweep runners."""
     grasp_estimator = components["GraspLikelihoodEstimator"]
     return {
@@ -462,6 +507,10 @@ def create_demo_visualizers(env, components, visualize_kinematic_angles=True,
         # ),
         "drawer_position": DrawerPositionVisualizer(env) if visualize_drawer_position else None,
         "gradient_trace": GradientTracePlotter(components["EEVelocities"]) if visualize_gradient_trace else None,
+        "camera_transform": (
+            EECameraTransformVisualizer(env, components["BearingSensor"])
+            if visualize_camera_transform else None
+        ),
     }
 
 
@@ -488,6 +537,10 @@ def update_demo_visualizers(visualizers, components, simulation_time, drawer_ori
             components["DrawerPosEstimator"].quantities["position_drawer"]
         )
 
+    camera_transform_visualizer = visualizers["camera_transform"]
+    if camera_transform_visualizer is not None:
+        camera_transform_visualizer.update()
+
     # ee_visualizer = visualizers["ee"]
     # if ee_visualizer is not None:
     #     ee_visualizer.update(components["EEPoseEstimator"].quantities["pose_ee"])
@@ -508,7 +561,7 @@ def update_demo_visualizers(visualizers, components, simulation_time, drawer_ori
     #         components["GraspLikelihoodEstimator"].quantities["likelihood_grasped_drawer"],
     #         components["VisibleEstimator"].quantities["likelihood_visible_drawer"],
     #         components["DrawerPosEstimator"].quantities["uncertainty_drawer"]
-        # )
+    #     )
 
 def setup_env(device_type, initial_qpos=None):
     if RENDER:
@@ -520,7 +573,7 @@ def setup_env(device_type, initial_qpos=None):
         has_offscreen_renderer=True,
         ignore_done=True,
         use_camera_obs=False,
-        render_camera="agentview", #'frontview', 'birdview', 'agentview', 'sideview', 'robot0_robotview', 'robot0_eye_in_hand'
+        render_camera="frontview", #'frontview', 'birdview', 'agentview', 'sideview', 'robot0_robotview', 'robot0_eye_in_hand'
         horizon=100,
         control_freq=30,
         controller_configs=suite.load_controller_config(default_controller="OSC_POSE"),
@@ -534,7 +587,9 @@ def setup_env(device_type, initial_qpos=None):
             {"name": KINEMATIC_DRAWER_INDICATOR, "type": "sphere", "size": [0.01], "rgba": [1, 0, 1, 0.95]}, #magenta
             {"name": KINEMATIC_DRAWER_INITIAL, "type": "sphere", "size": [0.01], "rgba": [1, 1, 0, 0.95]}, #yellow
             {"name": EE_POS_INDICATOR, "type": "sphere", "size": [0.01], "rgba": [1, 0, 1, 0.95]}, #magenta
-            {"name": DRAWER_POSITION_INDICATOR, "type": "sphere", "size": [0.01], "rgba": [0, 1, 0, 0.95]} #green
+            {"name": DRAWER_POSITION_INDICATOR, "type": "sphere", "size": [0.01], "rgba": [0, 1, 0, 0.95]}, #green
+            {"name": CAMERA_ORIGIN_INDICATOR, "type": "sphere", "size": [0.012], "rgba": [1, 0.2, 0.1, 1]}, #red
+            {"name": CAMERA_FORWARD_INDICATOR, "type": "capsule", "size": [0.006, CAMERA_FORWARD_LENGTH / 2], "rgba": [1, 0.1, 0, 0.9]}, #red
         ],
     )
     env.reset()
@@ -553,7 +608,8 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
               periodic_disturbance_magnitude=0.0, noise_scale=0.0,
               visualize_kinematic_angles=True, visualize_ee=True,
               visualize_drawer_position=True, visualize_grasp_diagnostics=True,
-              visualize_gradient_trace=True, render=None, status_label=None):
+              visualize_gradient_trace=True, visualize_camera_transform=True,
+              render=None, status_label=None):
     """Shared drawer-control loop for the interactive demo and parameter sweeps."""
     if reset_on_start:
         env.reset()
@@ -574,6 +630,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
         visualize_ee=visualize_ee, visualize_drawer_position=visualize_drawer_position,
         visualize_grasp_diagnostics=visualize_grasp_diagnostics,
         visualize_gradient_trace=visualize_gradient_trace,
+        visualize_camera_transform=visualize_camera_transform,
     ) if render else None
 
     curr_t, step_idx = 0.0, 1
@@ -611,7 +668,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
         base_env = env.env if hasattr(env, "env") else env
         true_joint = float(base_env.sim.data.qpos[base_env.cabinet_qpos_addrs])
         estimated_joint = float(kinematic.quantities["kinematic_joint"][2].item())
-        joint_error = estimated_joint + true_joint
+        joint_error = true_joint - estimated_joint
         kinematic_joint = kinematic.quantities["kinematic_joint"].detach().cpu().numpy().reshape(-1)
         kinematic_axis_error = float(
             np.linalg.norm(kinematic_joint[:2] - np.array([np.pi / 2, np.pi / 2]))
@@ -645,8 +702,8 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
             return False, max_timesteps, joint_error,true_joint, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
 
         # Get current joint positions
-        # panda_qpos = robot._joint_positions
-        # print(f"Current joint positions: {panda_qpos}")
+        panda_qpos = robot._joint_positions
+        print(f"Current joint positions: {panda_qpos}")
 
 
 def main(device, env, **kwargs):
@@ -655,7 +712,7 @@ def main(device, env, **kwargs):
         device.start_control()
     return run_trial(
         env, device, stop_on_done=False, periodic_disturbance_interval=DISTURBANCE_INTERVAL,
-        periodic_disturbance_magnitude=DISTURBANCE_MAGNITUDE, **kwargs,
+        periodic_disturbance_magnitude=DISTURBANCE_MAGNITUDE, **kwargs
     )
 
 
