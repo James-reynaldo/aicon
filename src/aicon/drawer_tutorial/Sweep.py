@@ -123,6 +123,10 @@ _ESTIMATOR_SWEEP_PARAMS = {
     "kinematic_joint": (
         # "initial_azimuth_default", 
         # "initial_elevation_default", 
+        "initial_uncertainty_scale",
+        "initial_elevation_uncertainty_scale",
+        "initial_azimuth_uncertainty_scale",
+        "joint_initial_uncertainty_scale",
         
         "grasped_noise",
         "ungrasped_noise", "axis_azimuth_process_noise",
