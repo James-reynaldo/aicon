@@ -5,7 +5,7 @@
 #SBATCH --mem-per-cpu=6G
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/%A_%a.out
-#SBATCH --array=0-424%200
+#SBATCH --array=0-456%200
 
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate domip2

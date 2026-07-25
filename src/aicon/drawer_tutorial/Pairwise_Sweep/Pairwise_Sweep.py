@@ -17,6 +17,23 @@ from aicon.drawer_tutorial.Experiment_store import ExperimentStore, _hash_config
 
 import time
 
+
+Visible_Initial_qpos_list = [
+np.array([-0.60657486,  0.55208371,  0.01406207, -1.88856343,  1.09944793,  1.29935419,  -0.16385514]), #visible
+np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]), #visible
+np.array([-0.60706375,  0.34607402,  0.09003703, -2.08550184,  1.2520165,   1.49328103,  -0.08097987]), #visible problem too close
+np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]), #visible
+np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]), # invisible
+]
+
+Invisible_Initial_qpos_list = [
+np.array([-0.48750612,  1.17415488,  0.19242183, -1.14334887,  1.13314345,  1.47119768,  0.04283408]),
+np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]), # invisible
+np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]), # invisible at first
+np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]), # invisible
+np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]), #visible
+]
+
 from aicon.drawer_tutorial.Sweep import (
     setup_env,
     run_trial,
@@ -25,9 +42,9 @@ from aicon.drawer_tutorial.Sweep import (
     get_default_connection_params as sweep_get_default_connection_params,
 )
 
-NUM_TRIALS_PER_JOB = 3
+NUM_TRIALS_PER_JOB = 10
 BOUNDARY_EXTENDED_TRIALS = 7
-RANDOM_INIT_TIME = 0.5  # seconds of random movement at start
+RANDOM_INIT_TIME = 0  # seconds of random movement at start
 MAX_TIMESTEPS = 1000
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -74,74 +91,67 @@ DB_SHARD_PREFIX = "experiment_store_job_"
 # ============================================================================
 
 # SWEEP_ESTIMATOR_GROUPS = {"drawer_position": ["meas_noise_factor", "R_add_scale"]}
-SWEEP_ESTIMATOR_GROUPS = {"drawer_position": [
-    "depth_prior",
-    "initial_uncertainty_scale", # maybe no
-    "initial_uncertainty_xy", # maybe no
-    "initial_uncertainty_depth", # maybe no
-    "initial_uncertainty_xy_none", # no need
-    "initial_uncertainty_depth_none",# no need
-    "sample_init_mean_likelihood_threshold", # no need
-    "sample_init_mean_distance_threshold", # no need
-    "sample_init_mean_uncertainty_multiplier", # no need
+SWEEP_ESTIMATOR_GROUPS = {
+    "ee_pose": (
+        "initial_uncertainty_scale", "action_process_noise", "proprio_update_noise",
+    ),
+    "visible": (
+        "initial_likelihood_prior", "initial_clip_min", "initial_clip_max", "update_gain",
+    ),
+    "grasp_likelihood": (
+        # "initial_likelihood", 
+        # "initially_grasped_likelihood",
 
-    "meas_noise_factor",
-    "visual_likelihood_steepness", 
-    "R_add_scale", 
-    "measurement_nan_reject_scale", 
-    "forward_noise_grasped_coeff", 
-    "forward_noise_base",  
-    "grasped_update_R_scale", 
-    "grasped_outlier_rejection_threshold",
-    "measurement_existence_threshold",
-    "grasped_uncertainty_threshold",
-    "missed_absent_measurement_uncertainty_coeff", 
-    "hand_change_recovery_time", 
-    "tf_lookup_timeout"],
-
-    "kinematic_joint": [
-        "initial_azimuth_default",
-        "initial_elevation_default",
-        "grasped_noise",
-        "ungrasped_noise",
-        "axis_azimuth_process_noise",
-        "axis_elevation_process_noise",
-        "joint_process_noise",
-        "anchor_process_noise", # Does not seem to matter
-        "grasp_threshold", # Does not matter much, just not zero
-        "grasp_floor", # When value too high, estimation error quite big
-        "outlier_rejection_treshold",
-        "shift_clip_min",],
-    "grasp_likelihood": [
-        "initial_likelihood", # Seem to not matter at all
-        "initially_grasped_likelihood",
-        "baseline_measurement_likelihood",
-        "initial_clip_min",
+        "baseline_measurement_likelihood", 
+        "initial_clip_min", 
         "initial_clip_max",
-        "initial_time_since_hand_change",
+        "initial_time_since_hand_change", 
 
-        "gripper_activation_threshold",
-        "close_distance_threshold",
-        "uncertainty_dist_threshold",
-        "hand_change_time_threshold",
-        "force_time_scale",
-        "force_time_max",
-        "low_likelihood_threshold",
+        # "gripper_activation_threshold",
+        # "close_distance_threshold", 
+        # "uncertainty_dist_threshold",
+        # "hand_change_time_threshold", 
+        # "force_time_scale", 
+        # "force_time_max",
+        # "low_likelihood_threshold", 
+        
         "negative_innovation_threshold",
         "negative_innovation_scale",
-        ],
-    "visible": [
-        "initial_likelihood_prior",
-        "initial_clip_min",
-        "initial_clip_max",
-
-        "update_gain",
-        ],
-    "ee_pose": [
-        "initial_uncertainty_scale", # Seem to not matter at all
-        "action_process_noise", # Seem to not matter so much, just not negative (fail)
-        "proprio_update_noise",
-        ],
+    ),
+    "drawer_position": (
+        # "depth_prior", 
+        
+        "initial_uncertainty_scale", "initial_uncertainty_xy",
+        "initial_uncertainty_depth", "initial_uncertainty_xy_none",
+        "initial_uncertainty_depth_none", 
+        
+        # "sample_init_mean_likelihood_threshold",
+        # "sample_init_mean_distance_threshold",
+        # "sample_init_mean_uncertainty_multiplier", 
+        
+        "meas_noise_factor",
+        "visual_likelihood_steepness", "R_add_scale", "measurement_nan_reject_scale",
+        "forward_noise_grasped_coeff", "forward_noise_base", "grasped_update_R_scale",
+        "grasped_outlier_rejection_threshold", "measurement_existence_threshold",
+        "grasped_uncertainty_threshold", "missed_absent_measurement_uncertainty_coeff",
+        "hand_change_recovery_time", 
+        
+        # "tf_lookup_timeout",
+    ),
+    "kinematic_joint": (
+        # "initial_azimuth_default", 
+        # "initial_elevation_default", 
+        "initial_uncertainty_scale",
+        "initial_elevation_uncertainty_scale",
+        "initial_azimuth_uncertainty_scale",
+        "joint_initial_uncertainty_scale",
+        
+        "grasped_noise",
+        "ungrasped_noise", "axis_azimuth_process_noise",
+        "axis_elevation_process_noise", "joint_process_noise", "anchor_process_noise",
+        "grasp_threshold", "grasp_floor", "outlier_rejection_treshold", 
+        # "shift_clip_min",
+    ),
     }
 SWEEP_CONNECTION_GROUPS = {"DistGraspHandConnection": [
         "dist_decay",
@@ -429,8 +439,13 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
 
     try:
         for run in range(NUM_TRIALS_PER_JOB):
+            if run < len(Visible_Initial_qpos_list):
+                initial_panda_qpos = Visible_Initial_qpos_list[run]
+            else:
+                initial_panda_qpos = Invisible_Initial_qpos_list[run - len(Visible_Initial_qpos_list)]
+            env = setup_env(initial_qpos=initial_panda_qpos)
             set_global_seed(run)
-            success, timesteps, err, grasp, grasped = run_trial(
+            success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
                 env,
                 estimator_params=job["trial_params"],
                 max_timesteps=MAX_TIMESTEPS,
@@ -450,6 +465,10 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
                 seed=run,
                 timesteps=timesteps,
                 error=err,
+                true_joint=true_joint,
+                grasp=grasp,
+                kinematic_axis_error=kinematic_axis_error,
+                anchor_error=anchor_error,
                 metadata=job_metadata,
             )
 
@@ -461,51 +480,63 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
                 success,
                 timesteps,
                 err,
+                true_joint,
+                grasp,
+                kinematic_axis_error,
+                anchor_error
             ))
 
             print(f"run {run}: success={success}, steps={timesteps}, err={err}")
 
-        initial_successes = sum(1 for result in results if result[4])
-        if initial_successes in {1, 2}:
-            print(
-                f"Boundary success rate detected ({initial_successes}/{NUM_TRIALS_PER_JOB}), "
-                f"running {BOUNDARY_EXTENDED_TRIALS} more trials to total {NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS} runs."
-            )
-            for run in range(NUM_TRIALS_PER_JOB, NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS):
-                set_global_seed(run)
-                success, timesteps, err, grasp, grasped = run_trial(
-                    env,
-                    estimator_params=job["trial_params"],
-                    max_timesteps=MAX_TIMESTEPS,
-                    sweep_label=job["sweep_label"],
-                    group_name=job["group_name"],
-                    param_name=job["param_name"],
-                    sweep_value=job["sweep_value"],
-                    random_init_time=RANDOM_INIT_TIME,
-                    random_std=1,
-                    disturbance=disturbance,
-                    noise_scale=noise_scale
-                )
+        # initial_successes = sum(1 for result in results if result[4])
+        # if initial_successes in {1, 2}:
+        #     print(
+        #         f"Boundary success rate detected ({initial_successes}/{NUM_TRIALS_PER_JOB}), "
+        #         f"running {BOUNDARY_EXTENDED_TRIALS} more trials to total {NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS} runs."
+        #     )
+        #     for run in range(NUM_TRIALS_PER_JOB, NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS):
+        #         set_global_seed(run)
+        #         success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
+        #             env,
+        #             estimator_params=job["trial_params"],
+        #             max_timesteps=MAX_TIMESTEPS,
+        #             sweep_label=job["sweep_label"],
+        #             group_name=job["group_name"],
+        #             param_name=job["param_name"],
+        #             sweep_value=job["sweep_value"],
+        #             random_init_time=RANDOM_INIT_TIME,
+        #             random_std=1,
+        #             disturbance=disturbance,
+        #             noise_scale=noise_scale
+        #         )
 
-                store.add_trial(
-                    params=job["trial_params"],
-                    success=success,
-                    seed=run,
-                    timesteps=timesteps,
-                    error=err,
-                    metadata=job_metadata,
-                )
+        #         store.add_trial(
+        #             params=job["trial_params"],
+        #             success=success,
+        #             seed=run,
+        #             timesteps=timesteps,
+        #             error=err,
+        #             true_joint=true_joint,
+        #             grasp=grasp,
+        #             kinematic_axis_error=kinematic_axis_error,
+        #             anchor_error=anchor_error,
+        #             metadata=job_metadata,
+        #         )
 
-                results.append((
-                    job["group_name"],
-                    job["param_name"],
-                    job["sweep_label"],
-                    job["sweep_value"],
-                    success,
-                    timesteps,
-                    err,
-                ))
-                print(f"run {run}: success={success}, steps={timesteps}, err={err}")
+        #         results.append((
+        #             job["group_name"],
+        #             job["param_name"],
+        #             job["sweep_label"],
+        #             job["sweep_value"],
+        #             success,
+        #             timesteps,
+        #             err,
+        #             true_joint,
+        #             grasp,
+        #             kinematic_axis_error,
+        #             anchor_error
+        #         ))
+        #         print(f"run {run}: success={success}, steps={timesteps}, err={err}")
     finally:
         try:
             env.close()

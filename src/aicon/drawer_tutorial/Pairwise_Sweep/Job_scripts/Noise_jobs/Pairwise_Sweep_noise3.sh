@@ -5,7 +5,7 @@
 #SBATCH --mem-per-cpu=6G
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/%A_%a.out
-#SBATCH --array=1-10000%200
+#SBATCH --array=1-5536%200
 
 
 source $(conda info --base)/etc/profile.d/conda.sh

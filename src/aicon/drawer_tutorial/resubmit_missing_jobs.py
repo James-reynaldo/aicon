@@ -28,6 +28,22 @@ def extract_index_from_filename(name: str) -> Optional[int]:
     return int(matches[-1])
 
 
+def extract_index_from_log(path: Path) -> Optional[int]:
+    """Extract the job index from a log file.
+
+    Looks for a line like:
+        Running job with ID: 42
+    """
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        return None
+
+    match = re.search(r"Running job with ID:\s*(\d+)", text)
+    if match:
+        return int(match.group(1))
+    return None
+
 def find_incomplete_logs(log_dir: Path, phrase: str, recursive: bool) -> List[Path]:
     if recursive:
         files = sorted(p for p in log_dir.rglob("*") if p.is_file())
@@ -49,7 +65,7 @@ def find_incomplete_logs(log_dir: Path, phrase: str, recursive: bool) -> List[Pa
 def format_missing_indexes(files: Iterable[Path]) -> List[str]:
     results: List[str] = []
     for path in files:
-        index = extract_index_from_filename(path.name)
+        index = extract_index_from_log(path)
         if index is not None:
             results.append(str(index))
         else:
