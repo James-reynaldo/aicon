@@ -12,6 +12,8 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR_DISTURBANCE = DATA_DIR / "disturbance"
 DATA_DIR_NOISE = DATA_DIR / "noise"
 DATA_DIR_NORMAL = DATA_DIR / "normal"
+DATA_DIR_BAD_PRIOR = DATA_DIR / "bad_prior"
+DATA_DIR_BAD_PRIOR_KINEMATIC = DATA_DIR / "bad_prior_kinematic"
 NUM_TRIALS_PER_JOB = 10
 BOUNDARY_EXTENDED_TRIALS = 7
 RANDOM_INIT_TIME = 0  # seconds of random movement at start
@@ -67,7 +69,7 @@ def get_all_jobs():
     return jobs_est + jobs_conn + [standard_job]
 
 
-def main(job_index: int, disturbance: float = None, noise_scale: float = None):
+def main(job_index: int, disturbance: float = None, noise_scale: float = None, prior_noise_std: float = None, prior_noise_std_kinematic: float = None):
     jobs = get_all_jobs()
     print(total_jobs := len(jobs), "total jobs")
     if job_index < 0 or job_index >= len(jobs):
@@ -83,6 +85,10 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
         directory = DATA_DIR_DISTURBANCE
     elif noise_scale != 0:
         directory = DATA_DIR_NOISE
+    elif prior_noise_std != 0:
+        directory = DATA_DIR_BAD_PRIOR
+    elif prior_noise_std_kinematic != 0:
+        directory = DATA_DIR_BAD_PRIOR_KINEMATIC
     else:
         directory = DATA_DIR_NORMAL
     directory.mkdir(exist_ok=True, parents=True)
@@ -116,7 +122,9 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
                 random_init_time=RANDOM_INIT_TIME,
                 random_std=1,
                 disturbance=disturbance,
-                noise_scale=noise_scale
+                noise_scale=noise_scale,
+                prior_noise_std=prior_noise_std,
+                prior_noise_std_kinematic=prior_noise_std_kinematic
             )
 
             store.add_trial(
@@ -147,56 +155,7 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None):
             ))
 
             print(f"run {run}: success={success}, steps={timesteps}, err={err}")
-
-        # initial_successes = sum(1 for result in results if result[4])
-        # if initial_successes in {1, 2}:
-        #     print(
-        #         f"Boundary success rate detected ({initial_successes}/{NUM_TRIALS_PER_JOB}), "
-        #         f"running {BOUNDARY_EXTENDED_TRIALS} more trials to total 10 runs."
-        #     )
-        #     for run in range(NUM_TRIALS_PER_JOB, NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS):
-        #         set_global_seed(run)
-        #         success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
-        #             env,
-        #             estimator_params=job["trial_params"],
-        #             max_timesteps=MAX_TIMESTEPS,
-        #             sweep_label=job["sweep_label"],
-        #             group_name=job["group_name"],
-        #             param_name=job["param_name"],
-        #             sweep_value=job["sweep_value"],
-        #             random_init_time=RANDOM_INIT_TIME,
-        #             random_std=1,
-        #             disturbance=disturbance,
-        #             noise_scale=noise_scale
-        #         )
-
-        #         store.add_trial(
-        #             params=job["trial_params"],
-        #             success=success,
-        #             seed=run,
-        #             timesteps=timesteps,
-        #             error=err,
-        #             true_joint=true_joint,
-        #             grasp=grasp,
-        #             kinematic_axis_error=kinematic_axis_error,
-        #             anchor_error=anchor_error,
-        #             metadata=job_metadata,
-        #         )
-
-        #         results.append((
-        #             job["group_name"],
-        #             job["param_name"],
-        #             job["sweep_label"],
-        #             job["sweep_value"],
-        #             success,
-        #             timesteps,
-        #             err,
-        #             true_joint,
-        #             grasp,
-        #             kinematic_axis_error,
-        #             anchor_error
-        #         ))
-        #         print(f"run {run}: success={success}, steps={timesteps}, err={err}")
+            
     finally:
         try:
             env.close()
@@ -211,4 +170,6 @@ if __name__ == "__main__":
     idx = int(sys.argv[1])
     disturbance = float(sys.argv[2]) if len(sys.argv) > 2 else 0
     noise_scale = float(sys.argv[3]) if len(sys.argv) > 3 else 0
-    main(idx, disturbance=disturbance, noise_scale=noise_scale)
+    prior_noise_std = float(sys.argv[4]) if len(sys.argv) > 4 else 0
+    prior_noise_std_kinematic = float(sys.argv[5]) if len(sys.argv) > 5 else 0
+    main(idx, disturbance=disturbance, noise_scale=noise_scale, prior_noise_std=prior_noise_std, prior_noise_std_kinematic=prior_noise_std_kinematic)

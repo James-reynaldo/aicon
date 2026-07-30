@@ -16,10 +16,12 @@ from aicon.drawer_tutorial.sensors import BearingSensor, DrawerPoseSenser, EEFor
 OPEN_VALUE = -0.1  # The open value for the drawer joint, used in the DrawerOpenViaJointGoal
 
 def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params=None, connection_params=None,
-                                               noise_scale: float = 0.0):
+                                               noise_scale: float = 0.0, prior_noise_std: float = 0.05, prior_noise_std_kinematic: float = 0.15):
     """
     Builds the connections and components for the basic drawer motion experiment.
     """
+
+    print("Building functions with noise_scale:", noise_scale, "prior_noise_std:", prior_noise_std, "prior_noise_std_kinematic:", prior_noise_std_kinematic)
     estimator_params = estimator_params or {}
     connection_builders = build_connections(connection_params)
     component_builders = {
@@ -89,7 +91,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                         device=torch.device("cpu"),
                                                                         dtype=torch.double, mockbuild=mockbuild,
                                                                         sim_env_pointer=sim_env_pointer,
-                                                                        **estimator_params.get("drawer_position", {}),
+                                                                        **estimator_params.get("drawer_position", {}), depth_exact_prior_noise_std=prior_noise_std
                                                                         ),
         "DistanceEstimator": lambda mockbuild: DistEEDrawerEstimator("DistanceEstimator",
                                                                      connections={k: connection_builders[k] for k in
@@ -126,7 +128,7 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                                                             mockbuild=False: DrawerOpenViaJointGoal(
                                                                              is_active=True, dtype=t, device=d,
                                                                              mockbuild=mockbuild, open_value=OPEN_VALUE)},
-                                                                         **estimator_params.get("kinematic_joint", {}),
+                                                                         **estimator_params.get("kinematic_joint", {}), kinematic_axis_noise_std = prior_noise_std_kinematic
                                                                          )
     }
     frame_rates = {

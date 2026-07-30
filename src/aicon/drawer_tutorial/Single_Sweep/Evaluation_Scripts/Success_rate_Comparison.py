@@ -104,7 +104,7 @@ def build_summary(rows, sweep_label="negative", metric="success_rate"):
         filtered_rows = rows
     elif sweep_label == "positive":
         # For positive, include all rows that are not "negative" or "zero"
-        filtered_rows = [row for row in rows if row.get("sweep_label") not in ("negative", "zero")]
+        filtered_rows = [row for row in rows if row.get("sweep_label") not in ("negative", "zero", "x1000")]
     else:
         # For "negative" or "zero", filter exactly
         filtered_rows = [row for row in rows if row.get("sweep_label") == sweep_label]
@@ -712,9 +712,9 @@ def plot_combined_summary(
             )
         )
     group_legend = [Patch(facecolor=colors_map[pg], label=pg) for pg in summary_normal.keys()]
-    dataset_legend_artist = ax.legend(handles=dataset_legend, loc="upper left")
+    dataset_legend_artist = ax.legend(handles=dataset_legend, loc="lower left")
     ax.add_artist(dataset_legend_artist)
-    ax.legend(handles=group_legend, loc="upper right", title="Parameter Groups")
+    ax.legend(handles=group_legend, loc="lower right", title="Parameter Groups")
     
     plt.tight_layout()
     output_file = output_dir / f"{metric}_{sweep_label}_combined.png"
@@ -746,7 +746,7 @@ def main():
     )
     parser.add_argument(
         "--sweep-label",
-        choices=["negative", "zero", "positive", "all"],
+        choices=["negative", "zero", "positive","x1000", "all"],
         default="negative",
         help="Which sweep values to analyze: negative, zero, positive, or all.",
     )
@@ -810,6 +810,8 @@ def main():
         out_dir = Path.cwd() / f"{metric_suffix}_comparison_plots_positive"
     elif args.sweep_label == "zero":
         out_dir = Path.cwd() / f"{metric_suffix}_comparison_plots_zero"
+    elif args.sweep_label == "x1000":
+        out_dir = Path.cwd() / f"{metric_suffix}_comparison_plots_x1000"
     elif args.sweep_label == "all":
         out_dir = Path.cwd() / f"{metric_suffix}_comparison_plots_all"
     else:

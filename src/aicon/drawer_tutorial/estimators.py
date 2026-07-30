@@ -845,8 +845,9 @@ class KinematicJointEstimator(EstimationComponent):
                  anchor_process_noise: float = 2e-2,
                  grasp_threshold: float = 0.5,
                  grasp_floor: float = 0.000000000001,
-                 initial_azimuth_default: float = math.pi/2 - 0.2,
-                 initial_elevation_default: float = math.pi/2 - 0.2,
+                 initial_azimuth_default: float = math.pi/2, # this is real value
+                 initial_elevation_default: float = math.pi/2, # this is real value
+                 kinematic_axis_noise_std: float = 0.15,
                  outlier_rejection_treshold: float = 1.0,
                  shift_clip_min: float = 1e-10):
         """
@@ -885,6 +886,7 @@ class KinematicJointEstimator(EstimationComponent):
         self.ungrasped_noise = ungrasped_noise
         self.axis_azimuth_process_noise = axis_azimuth_process_noise
         self.axis_elevation_process_noise = axis_elevation_process_noise
+        self.kinematic_axis_noise_std = kinematic_axis_noise_std
         self.joint_process_noise = joint_process_noise
         self.anchor_process_noise = anchor_process_noise
         self.grasp_threshold = grasp_threshold
@@ -899,10 +901,16 @@ class KinematicJointEstimator(EstimationComponent):
             return False
         self.quantities["kinematic_joint"] = torch.zeros(self.state_dim, device=self.device, dtype=self.dtype)
         # elevation default (index 1)
-        self.quantities["kinematic_joint"][1] = self.initial_elevation_default
+        if self.kinematic_axis_noise_std is not None:
+            self.quantities["kinematic_joint"][1] = self.initial_elevation_default + torch.normal(mean=0.0, std=self.kinematic_axis_noise_std, size=(1,), device=self.device, dtype=self.dtype)
+        else:
+            self.quantities["kinematic_joint"][1] = self.initial_elevation_default
         if self.initial_rotation_xy is None:
             # azimuth default (index 0)
-            self.quantities["kinematic_joint"][0] = self.initial_azimuth_default
+            if self.kinematic_axis_noise_std is not None:
+                self.quantities["kinematic_joint"][0] = self.initial_azimuth_default + torch.normal(mean=0.0, std=self.kinematic_axis_noise_std, size=(1,), device=self.device, dtype=self.dtype)
+            else:
+                self.quantities["kinematic_joint"][0] = self.initial_azimuth_default
         else:
             # depends on rotation of robot to drawer cabinet
             self.quantities["kinematic_joint"][0] = self.initial_rotation_xy

@@ -233,10 +233,7 @@ def filter_single_parameter_sweeps(sweep_jobs, group_name, param_name):
 
 def run_trial(env, estimator_params, max_timesteps=None, sweep_label="", group_name="",
               param_name="", sweep_value=None, stop_on_done=True, reset_on_start=True,
-              random_init_time=0.0, random_std=0.1, disturbance=None, noise_scale=0.0,
-              visualize_kinematic_angles=DEFAULT_VISUALIZE_KINEMATICS,
-              visualize_ee=DEFAULT_VISUALIZE_EE,
-              visualize_grasp_diagnostics=DEFAULT_VISUALIZE_GRASP_DIAGNOSTICS):
+              random_init_time=0.0, random_std=0.1, disturbance=None, noise_scale=0.0, prior_noise_std=0.0, prior_noise_std_kinematic=0.0):
     """Sweep-compatible adapter around the shared demo trial runner."""
     status_label = f"{group_name}.{param_name}={sweep_label}:{sweep_value}"
     return run_demo_trial(
@@ -250,9 +247,8 @@ def run_trial(env, estimator_params, max_timesteps=None, sweep_label="", group_n
         random_std=random_std,
         random_disturbance=disturbance,
         noise_scale=noise_scale,
-        visualize_kinematic_angles=visualize_kinematic_angles,
-        visualize_ee=visualize_ee,
-        visualize_grasp_diagnostics=visualize_grasp_diagnostics,
+        prior_noise_std=prior_noise_std,
+        prior_noise_std_kinematic=prior_noise_std_kinematic,
         # Sweep historically creates its diagnostic plots independently of MuJoCo rendering.
         status_label=status_label,
     )

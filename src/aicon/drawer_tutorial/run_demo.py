@@ -15,7 +15,8 @@ from robosuite.wrappers import VisualizationWrapper
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion, OPEN_VALUE
 from aicon.drawer_tutorial.util import pose_vec_to_homogeneous
 
-RENDER = False  # Set to True to visualize the environment
+RENDER = True  # Set to True to visualize the environment
+PLOTTER = False  # Set to True to enable live plotting of diagnostics
 
 if RENDER:
     from robosuite.devices import Keyboard, SpaceMouse
@@ -491,7 +492,7 @@ class DrawerPositionVisualizer:
 
         self.base_env.sim.forward()
 
-def create_demo_visualizers(env, components, visualize_kinematic_angles=True,
+def create_demo_visualizers(env, components, visualize_kinematic_angles=True, visualize_kinematic_angles_plot=True,
                             visualize_ee=True, visualize_grasp_diagnostics=True,
                             visualize_drawer_position=True, visualize_gradient_trace=True,
                             visualize_camera_transform=True):
@@ -499,12 +500,12 @@ def create_demo_visualizers(env, components, visualize_kinematic_angles=True,
     grasp_estimator = components["GraspLikelihoodEstimator"]
     return {
         "joint": KinematicJointVisualizer(env) if visualize_kinematic_angles else None,
-        # "joint_angles": KinematicJointAnglePlotter(env) if visualize_kinematic_angles else None,
+        "joint_angles": KinematicJointAnglePlotter(env) if visualize_kinematic_angles_plot else None,
         # "ee": EEPosVisualizer(env) if visualize_ee else None,
-        # "grasp": (
-        #     GraspDiagnosticsPlotter(grasp_estimator.connections["GraspedLikelihood"])
-        #     if visualize_grasp_diagnostics else None
-        # ),
+        "grasp": (
+            GraspDiagnosticsPlotter(grasp_estimator.connections["GraspedLikelihood"])
+            if visualize_grasp_diagnostics else None
+        ),
         "drawer_position": DrawerPositionVisualizer(env) if visualize_drawer_position else None,
         "gradient_trace": GradientTracePlotter(components["EEVelocities"]) if visualize_gradient_trace else None,
         "camera_transform": (
@@ -522,14 +523,14 @@ def update_demo_visualizers(visualizers, components, simulation_time, drawer_ori
             components["KinematicJointEstimator"].quantities["kinematic_joint"]
         )
 
-    # joint_angles_plotter = visualizers["joint_angles"]
-    # if joint_angles_plotter is not None:
-    #     joint_angles_plotter.update(
-    #         simulation_time,
-    #         components["KinematicJointEstimator"].quantities["kinematic_joint"],
-    #         drawer_orientation,
-    #         components["DrawerPosEstimator"].quantities["position_drawer"],
-    #     )
+    joint_angles_plotter = visualizers["joint_angles"]
+    if joint_angles_plotter is not None:
+        joint_angles_plotter.update(
+            simulation_time,
+            components["KinematicJointEstimator"].quantities["kinematic_joint"],
+            drawer_orientation,
+            components["DrawerPosEstimator"].quantities["position_drawer"],
+        )
 
     drawer_position_visualizer = visualizers["drawer_position"]
     if drawer_position_visualizer is not None:
@@ -549,19 +550,20 @@ def update_demo_visualizers(visualizers, components, simulation_time, drawer_ori
     if gradient_plotter is not None:
         gradient_plotter.update(simulation_time)
 
-    # grasp_plotter = visualizers["grasp"]
-    # if grasp_plotter is not None:
-    #     grasp_plotter.update(
-    #         simulation_time,
-    #         components["EEForceSensor"].quantities["ee_force_mag_meas"],
-    #         components["DistanceEstimator"].quantities["distance_ee_drawer"][0],
-    #         components["DistanceEstimator"].quantities["uncertainty_dist"],
-    #         components["GripperAction"].quantities["gripper_activation"],
-    #         components["GraspLikelihoodEstimator"].quantities["time_since_hand_change"],
-    #         components["GraspLikelihoodEstimator"].quantities["likelihood_grasped_drawer"],
-    #         components["VisibleEstimator"].quantities["likelihood_visible_drawer"],
-    #         components["DrawerPosEstimator"].quantities["uncertainty_drawer"]
-    #     )
+
+    grasp_plotter = visualizers["grasp"]
+    if grasp_plotter is not None:
+        grasp_plotter.update(
+            simulation_time,
+            components["EEForceSensor"].quantities["ee_force_mag_meas"],
+            components["DistanceEstimator"].quantities["distance_ee_drawer"][0],
+            components["DistanceEstimator"].quantities["uncertainty_dist"],
+            components["GripperAction"].quantities["gripper_activation"],
+            components["GraspLikelihoodEstimator"].quantities["time_since_hand_change"],
+            components["GraspLikelihoodEstimator"].quantities["likelihood_grasped_drawer"],
+            components["VisibleEstimator"].quantities["likelihood_visible_drawer"],
+            components["DrawerPosEstimator"].quantities["uncertainty_drawer"]
+        )
 
 def setup_env(device_type, initial_qpos=None):
     if RENDER:
@@ -573,7 +575,7 @@ def setup_env(device_type, initial_qpos=None):
         has_offscreen_renderer=True,
         ignore_done=True,
         use_camera_obs=False,
-        render_camera="frontview", #'frontview', 'birdview', 'agentview', 'sideview', 'robot0_robotview', 'robot0_eye_in_hand'
+        render_camera="agentview", #'frontview', 'birdview', 'agentview', 'sideview', 'robot0_robotview', 'robot0_eye_in_hand'
         horizon=100,
         control_freq=30,
         controller_configs=suite.load_controller_config(default_controller="OSC_POSE"),
@@ -605,10 +607,7 @@ def setup_env(device_type, initial_qpos=None):
 def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_done=False,
               reset_on_start=True, random_init_time=0.0, random_std=0.1,
               random_disturbance=None, periodic_disturbance_interval=None,
-              periodic_disturbance_magnitude=0.0, noise_scale=0.0,
-              visualize_kinematic_angles=True, visualize_ee=True,
-              visualize_drawer_position=True, visualize_grasp_diagnostics=True,
-              visualize_gradient_trace=True, visualize_camera_transform=True,
+              periodic_disturbance_magnitude=0.0, noise_scale=0.0, prior_noise_std =0.0,prior_noise_std_kinematic=0.0,
               render=None, status_label=None):
     """Shared drawer-control loop for the interactive demo and parameter sweeps."""
     if reset_on_start:
@@ -617,7 +616,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
     params = copy.deepcopy(estimator_params) if isinstance(estimator_params, dict) else estimator_params
     connection_params = params.pop("connection_params", None) if isinstance(params, dict) else None
     builders, _, _ = get_building_functions_basic_drawer_motion(
-        env, estimator_params=params, connection_params=connection_params, noise_scale=noise_scale,
+        env, estimator_params=params, connection_params=connection_params, noise_scale=noise_scale,prior_noise_std=prior_noise_std,prior_noise_std_kinematic=prior_noise_std_kinematic
     )
     components = build_components(builders)
     gripper = components["GripperAction"]
@@ -626,11 +625,12 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
     grasp = components["GraspLikelihoodEstimator"]
     render = RENDER if render is None else render
     visualizers = create_demo_visualizers(
-        env, components, visualize_kinematic_angles=visualize_kinematic_angles,
-        visualize_ee=visualize_ee, visualize_drawer_position=visualize_drawer_position,
-        visualize_grasp_diagnostics=visualize_grasp_diagnostics,
-        visualize_gradient_trace=visualize_gradient_trace,
-        visualize_camera_transform=visualize_camera_transform,
+        env, components, visualize_kinematic_angles=True,
+        visualize_kinematic_angles_plot=PLOTTER,
+        visualize_ee=True, visualize_drawer_position=True,
+        visualize_grasp_diagnostics=PLOTTER,
+        visualize_gradient_trace=True,
+        visualize_camera_transform=PLOTTER,
     ) if render else None
 
     curr_t, step_idx = 0.0, 1
