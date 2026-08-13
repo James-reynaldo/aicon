@@ -630,7 +630,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
         visualize_ee=True, visualize_drawer_position=True,
         visualize_grasp_diagnostics=PLOTTER,
         visualize_gradient_trace=True,
-        visualize_camera_transform=PLOTTER,
+        visualize_camera_transform=True,
     ) if render else None
 
     curr_t, step_idx = 0.0, 1

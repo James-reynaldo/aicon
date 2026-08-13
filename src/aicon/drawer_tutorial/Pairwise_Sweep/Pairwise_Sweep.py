@@ -372,8 +372,29 @@ def merge_sharded_databases(source_dir: Path, target_db: Path) -> None:
                 )
                 target_store.conn.execute(
                     """
-                    INSERT INTO trials (config_id, seed, success, timesteps, error, metadata)
-                    SELECT config_id, seed, success, timesteps, error, metadata
+                    INSERT INTO trials (
+                        config_id,
+                        seed,
+                        success,
+                        timesteps,
+                        error,
+                        grasp,
+                        kinematic_axis_error,
+                        anchor_error,
+                        true_joint,
+                        metadata
+                    )
+                    SELECT
+                        config_id,
+                        seed,
+                        success,
+                        timesteps,
+                        error,
+                        grasp,
+                        kinematic_axis_error,
+                        anchor_error,
+                        true_joint,
+                        metadata
                     FROM srcdb.trials
                     """
                 )

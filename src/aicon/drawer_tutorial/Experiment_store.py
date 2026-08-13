@@ -117,12 +117,17 @@ class ExperimentStore:
             )
             """)
 
-            # If the table already exists but metadata is missing, migrate it.
+            # Migrate older schemas that predate metadata and the newer error columns.
             cur.execute("PRAGMA table_info(trials)")
             columns = [row[1] for row in cur.fetchall()]
             if "metadata" not in columns:
                 cur.execute("ALTER TABLE trials ADD COLUMN metadata TEXT")
-
+                columns = [row[1] for row in self.conn.execute("PRAGMA table_info(trials)").fetchall()]
+            for column_name in ("true_joint", "grasp", "kinematic_axis_error", "anchor_error"):
+                if column_name not in columns:
+                    column_type = "INTEGER" if column_name == "grasp" else "REAL"
+                    cur.execute(f"ALTER TABLE trials ADD COLUMN {column_name} {column_type}")
+                    columns = [row[1] for row in self.conn.execute("PRAGMA table_info(trials)").fetchall()]
             self.conn.commit()
 
         self._run_with_lock_retry(_create)
@@ -171,21 +176,44 @@ class ExperimentStore:
             INSERT OR IGNORE INTO configs (config_id, params)
             VALUES (?, ?)
             """, (config_id, json.dumps(params)))
-            cur.execute("""
-            INSERT INTO trials (config_id, seed, success, timesteps, error, grasp, kinematic_axis_error, anchor_error, true_joint, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
+            cur.execute("PRAGMA table_info(trials)")
+            trial_columns = {row[1] for row in cur.fetchall()}
+            insert_columns = [
+                "config_id",
+                "seed",
+                "success",
+                "timesteps",
+                "error",
+            ]
+            insert_values = [
                 config_id,
                 seed,
                 int(success),
                 timesteps,
                 None if error is None else float(error),
-                None if grasp is None else int(grasp),
-                None if kinematic_axis_error is None else float(kinematic_axis_error),
-                None if anchor_error is None else float(anchor_error),
-                None if true_joint is None else float(true_joint),
-                metadata_json,
-            ))
+            ]
+
+            if "grasp" in trial_columns:
+                insert_columns.append("grasp")
+                insert_values.append(None if grasp is None else int(grasp))
+            if "kinematic_axis_error" in trial_columns:
+                insert_columns.append("kinematic_axis_error")
+                insert_values.append(None if kinematic_axis_error is None else float(kinematic_axis_error))
+            if "anchor_error" in trial_columns:
+                insert_columns.append("anchor_error")
+                insert_values.append(None if anchor_error is None else float(anchor_error))
+            if "true_joint" in trial_columns:
+                insert_columns.append("true_joint")
+                insert_values.append(None if true_joint is None else float(true_joint))
+            if "metadata" in trial_columns:
+                insert_columns.append("metadata")
+                insert_values.append(metadata_json)
+
+            placeholders = ", ".join(["?"] * len(insert_columns))
+            cur.execute(
+                f"INSERT INTO trials ({', '.join(insert_columns)}) VALUES ({placeholders})",
+                insert_values,
+            )
             self.conn.commit()
 
         self._run_with_lock_retry(_insert_trial)
