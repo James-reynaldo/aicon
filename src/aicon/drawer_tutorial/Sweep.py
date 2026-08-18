@@ -251,6 +251,7 @@ def run_trial(env, estimator_params, max_timesteps=None, sweep_label="", group_n
         prior_noise_std_kinematic=prior_noise_std_kinematic,
         # Sweep historically creates its diagnostic plots independently of MuJoCo rendering.
         status_label=status_label,
+        render=False
     )
 
 

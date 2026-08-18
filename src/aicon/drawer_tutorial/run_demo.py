@@ -670,7 +670,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
                 -periodic_disturbance_magnitude, periodic_disturbance_magnitude, 3
             )
 
-        if MANUAL_CONTROL:
+        if MANUAL_CONTROL and render:
             action, _ = input2action(
                 device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
             )
