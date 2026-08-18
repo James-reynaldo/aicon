@@ -845,9 +845,9 @@ class KinematicJointEstimator(EstimationComponent):
                  anchor_process_noise: float = 2e-2,
                  grasp_threshold: float = 0.5,
                  grasp_floor: float = 0.000000000001,
-                 initial_azimuth_default: float = math.pi/2, # this is real value
-                 initial_elevation_default: float = math.pi/2, # this is real value
-                 kinematic_axis_noise_std: float = 0.15,
+                 initial_azimuth_default: float = math.pi/2-0.2, # this is real value
+                 initial_elevation_default: float = math.pi/2-0.2, # this is real value
+                 kinematic_axis_noise_std: float = 0.0,
                  outlier_rejection_treshold: float = 1.0,
                  shift_clip_min: float = 1e-10):
         """

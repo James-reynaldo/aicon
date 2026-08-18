@@ -233,7 +233,7 @@ def filter_single_parameter_sweeps(sweep_jobs, group_name, param_name):
 
 def run_trial(env, estimator_params, max_timesteps=None, sweep_label="", group_name="",
               param_name="", sweep_value=None, stop_on_done=True, reset_on_start=True,
-              random_init_time=0.0, random_std=0.1, disturbance=None, noise_scale=0.0, prior_noise_std=0.0, prior_noise_std_kinematic=0.0):
+              random_init_time=0.0, random_std=0.1, disturbance=None, noise_scale=1.0, prior_noise_std=0.01, prior_noise_std_kinematic=0.0):
     """Sweep-compatible adapter around the shared demo trial runner."""
     status_label = f"{group_name}.{param_name}={sweep_label}:{sweep_value}"
     return run_demo_trial(

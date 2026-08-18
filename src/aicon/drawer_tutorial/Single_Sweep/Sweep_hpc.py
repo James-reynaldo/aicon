@@ -4,9 +4,9 @@ import numpy as np
 from pathlib import Path
 
 from aicon.drawer_tutorial.Experiment_store import ExperimentStore
-from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
 from aicon.middleware.python_sequential import build_components, run_component_sequence
+from aicon.drawer_tutorial.initial_qpos import initial_qpos_list
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR_DISTURBANCE = DATA_DIR / "disturbance"
@@ -14,6 +14,7 @@ DATA_DIR_NOISE = DATA_DIR / "noise"
 DATA_DIR_NORMAL = DATA_DIR / "normal"
 DATA_DIR_BAD_PRIOR = DATA_DIR / "bad_prior"
 DATA_DIR_BAD_PRIOR_KINEMATIC = DATA_DIR / "bad_prior_kinematic"
+DATA_DIR_TEMP = DATA_DIR / "temp"
 NUM_TRIALS_PER_JOB = 10
 BOUNDARY_EXTENDED_TRIALS = 7
 RANDOM_INIT_TIME = 0  # seconds of random movement at start
@@ -34,6 +35,8 @@ np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.3
 np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]), # invisible
 np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]), #visible
 ]
+
+
 # reuse your existing functions (copy them from current file)
 from aicon.drawer_tutorial.Sweep import (
     get_default_estimator_params,
@@ -69,7 +72,7 @@ def get_all_jobs():
     return jobs_est + jobs_conn + [standard_job]
 
 
-def main(job_index: int, disturbance: float = None, noise_scale: float = None, prior_noise_std: float = None, prior_noise_std_kinematic: float = None):
+def main(job_index: int, disturbance: float = None, noise_scale: float = None, prior_noise_std: float = None, prior_noise_std_kinematic: float = None, temp: bool = False):
     jobs = get_all_jobs()
     print(total_jobs := len(jobs), "total jobs")
     if job_index < 0 or job_index >= len(jobs):
@@ -81,14 +84,16 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
 
     results = []
 
-    if disturbance != 0:
+    if disturbance is not None:
         directory = DATA_DIR_DISTURBANCE
-    elif noise_scale != 0:
+    elif noise_scale is not None:
         directory = DATA_DIR_NOISE
-    elif prior_noise_std != 0:
+    elif prior_noise_std is not None:
         directory = DATA_DIR_BAD_PRIOR
-    elif prior_noise_std_kinematic != 0:
+    elif prior_noise_std_kinematic is not None:
         directory = DATA_DIR_BAD_PRIOR_KINEMATIC
+    elif temp is True:
+        directory = DATA_DIR_TEMP
     else:
         directory = DATA_DIR_NORMAL
     directory.mkdir(exist_ok=True, parents=True)
@@ -100,31 +105,52 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
         "parameter": f"{job['group_name']}.{job['param_name']}",
         "label": job["sweep_label"],
         "sweep_value": job["sweep_value"],
+        "job_index": job_index,
+        "scenario": "disturbance" if disturbance is not None
+          else "noise" if noise_scale is not None 
+          else "bad_prior" if prior_noise_std is not None 
+          else "bad_prior_kinematic" if prior_noise_std_kinematic is not None 
+          else "normal",
     }
     job_metadata.update(job.get("metadata", {}))
 
     try:
         for run in range(NUM_TRIALS_PER_JOB): #5,6,9
-            if run < len(Visible_Initial_qpos_list):
-                initial_panda_qpos = Visible_Initial_qpos_list[run]
-            else:
-                initial_panda_qpos = Invisible_Initial_qpos_list[run - len(Visible_Initial_qpos_list)]
+            # if run < len(Visible_Initial_qpos_list):
+            #     initial_panda_qpos = Visible_Initial_qpos_list[run]
+            # else:
+            #     initial_panda_qpos = Invisible_Initial_qpos_list[run - len(Visible_Initial_qpos_list)]
+            initial_panda_qpos = initial_qpos_list[run]
             env = setup_env(initial_qpos=initial_panda_qpos)
             set_global_seed(run)  # set seed for reproducibility
+            # Arguments that are always passed
+            trial_kwargs = {
+                "estimator_params": job["trial_params"],
+                "max_timesteps": MAX_TIMESTEPS,
+                "sweep_label": job["sweep_label"],
+                "group_name": job["group_name"],
+                "param_name": job["param_name"],
+                "sweep_value": job["sweep_value"],
+                "random_init_time": RANDOM_INIT_TIME,
+                "random_std": 1,
+            }
+            # Only pass these if they were actually specified
+            if disturbance is not None:
+                trial_kwargs["disturbance"] = disturbance
+
+            if noise_scale is not None:
+                trial_kwargs["noise_scale"] = noise_scale
+
+            if prior_noise_std is not None:
+                trial_kwargs["prior_noise_std"] = prior_noise_std
+
+            if prior_noise_std_kinematic is not None:
+                trial_kwargs["prior_noise_std_kinematic"] = prior_noise_std_kinematic
+
+            # Run trial
             success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
                 env,
-                estimator_params=job["trial_params"],
-                max_timesteps=MAX_TIMESTEPS,
-                sweep_label=job["sweep_label"],
-                group_name=job["group_name"],
-                param_name=job["param_name"],
-                sweep_value=job["sweep_value"],
-                random_init_time=RANDOM_INIT_TIME,
-                random_std=1,
-                disturbance=disturbance,
-                noise_scale=noise_scale,
-                prior_noise_std=prior_noise_std,
-                prior_noise_std_kinematic=prior_noise_std_kinematic
+                **trial_kwargs
             )
 
             store.add_trial(
@@ -166,10 +192,53 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
     print(f"Experiment database saved to: {db_path}")
 
 
+import argparse
+
 if __name__ == "__main__":
-    idx = int(sys.argv[1])
-    disturbance = float(sys.argv[2]) if len(sys.argv) > 2 else 0
-    noise_scale = float(sys.argv[3]) if len(sys.argv) > 3 else 0
-    prior_noise_std = float(sys.argv[4]) if len(sys.argv) > 4 else 0
-    prior_noise_std_kinematic = float(sys.argv[5]) if len(sys.argv) > 5 else 0
-    main(idx, disturbance=disturbance, noise_scale=noise_scale, prior_noise_std=prior_noise_std, prior_noise_std_kinematic=prior_noise_std_kinematic)
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "job_index",
+        type=int,
+    )
+
+    parser.add_argument(
+        "--disturbance",
+        type=float,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--noise-scale",
+        type=float,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--prior-noise-std",
+        type=float,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--prior-noise-std-kinematic",
+        type=float,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--temp",
+        action="store_true",
+        default=False,
+    )
+
+    args = parser.parse_args()
+
+    main(
+        args.job_index,
+        disturbance=args.disturbance,
+        noise_scale=args.noise_scale,
+        prior_noise_std=args.prior_noise_std,
+        prior_noise_std_kinematic=args.prior_noise_std_kinematic,
+        temp=args.temp,
+    )

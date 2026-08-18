@@ -7,8 +7,9 @@ from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 from robosuite.models.arenas import TableArena
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.observables import Observable, sensor
-from robosuite.utils.mjcf_utils import CustomMaterial, array_to_string, find_elements, add_material
+from robosuite.utils.mjcf_utils import CustomMaterial,new_geom,new_body, array_to_string, find_elements, add_material
 from robosuite.utils.buffers import RingBuffer
+from robosuite.models.objects import BoxObject
 import robosuite.utils.transform_utils as T
 
 # Import the CabinetObject from robosuite_task_zoo
@@ -233,10 +234,28 @@ class DrawerOpenEnv(SingleArmEnv):
             mat_attrib={"texrepeat": "1 1", "specular": "0.4", "shininess": "0.1"}
         )
 
+        blockbody = new_body(
+            name="block_under_drawer",
+            pos=(0.2, 0.3, 0.05),
+        )
+
+        blockgeom = new_geom(
+            name="block_geom",
+            type="box",
+            size=(0.102, 0.102, 0.05),
+            pos=(0.0, 0.0, 0.025),
+            group=1,
+            rgba=(1, 0, 0, 1),
+            contype=1,
+            conaffinity=1,
+        )
+
+        blockbody.append(blockgeom)
+        mujoco_arena.table_body.append(blockbody)
         # Create cabinet object
         self.cabinet_object = CabinetObject(name="CabinetObject")
         cabinet_object = self.cabinet_object.get_obj()
-        cabinet_object.set("pos", array_to_string((0.2, 0.30, 0.03)))
+        cabinet_object.set("pos", array_to_string((0.2, 0.30, 0.15)))
         mujoco_arena.table_body.append(cabinet_object)
         
         # Add materials to cabinet

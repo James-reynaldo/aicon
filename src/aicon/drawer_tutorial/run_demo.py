@@ -17,6 +17,7 @@ from aicon.drawer_tutorial.util import pose_vec_to_homogeneous
 
 RENDER = True  # Set to True to visualize the environment
 PLOTTER = False  # Set to True to enable live plotting of diagnostics
+MANUAL_CONTROL = False  # Set to True to control the robot manually with keyboard or SpaceMouse
 
 if RENDER:
     from robosuite.devices import Keyboard, SpaceMouse
@@ -595,6 +596,12 @@ def setup_env(device_type, initial_qpos=None):
         ],
     )
     env.reset()
+    geom_id = env.sim.model.geom("block_geom").id
+
+    print("BLOCK EXISTS")
+    print("World position:", env.sim.data.geom_xpos[geom_id])
+    print("Size:", env.sim.model.geom_size[geom_id])
+    print("RGBA:", env.sim.model.geom_rgba[geom_id])
     if RENDER:
         device.start_control()
     # return env
@@ -602,12 +609,13 @@ def setup_env(device_type, initial_qpos=None):
         return env, device
     else:
         return env, None
+    
 
 
 def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_done=False,
               reset_on_start=True, random_init_time=0.0, random_std=0.1,
               random_disturbance=None, periodic_disturbance_interval=None,
-              periodic_disturbance_magnitude=0.0, noise_scale=0.0, prior_noise_std =0.0,prior_noise_std_kinematic=0.0,
+              periodic_disturbance_magnitude=0.0, noise_scale=1.0, prior_noise_std =0.01,prior_noise_std_kinematic=0.0,
               render=None, status_label=None):
     """Shared drawer-control loop for the interactive demo and parameter sweeps."""
     if reset_on_start:
@@ -629,7 +637,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
         visualize_kinematic_angles_plot=PLOTTER,
         visualize_ee=True, visualize_drawer_position=True,
         visualize_grasp_diagnostics=PLOTTER,
-        visualize_gradient_trace=True,
+        visualize_gradient_trace=PLOTTER,
         visualize_camera_transform=True,
     ) if render else None
 
@@ -639,6 +647,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
     done_wait_steps = 0
     base_env = env.env if hasattr(env, "env") else env
     initial_drawer_handle_pos = np.asarray(base_env.get_drawer_handle_pos(), dtype=np.float64).reshape(-1)
+    print("initial_drawer_handle_pos:", initial_drawer_handle_pos)
     while True:
         run_component_sequence(components, torch.tensor(curr_t))
         velocity = velocities.quantities["action_velo_ee"].cpu().numpy()
@@ -661,9 +670,10 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
                 -periodic_disturbance_magnitude, periodic_disturbance_magnitude, 3
             )
 
-        # action, _ = input2action(
-        #     device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
-        # )
+        if MANUAL_CONTROL:
+            action, _ = input2action(
+                device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
+            )
         obs, reward, done, _ = env.step(action)
         base_env = env.env if hasattr(env, "env") else env
         true_joint = float(base_env.sim.data.qpos[base_env.cabinet_qpos_addrs])
@@ -702,8 +712,9 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
             return False, max_timesteps, joint_error,true_joint, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
 
         # Get current joint positions
-        panda_qpos = robot._joint_positions
-        print(f"Current joint positions: {panda_qpos}")
+        if MANUAL_CONTROL:
+            panda_qpos = robot._joint_positions
+            print(f"Current joint positions: {panda_qpos}")
 
 
 def main(device, env, **kwargs):

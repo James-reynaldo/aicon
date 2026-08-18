@@ -14,6 +14,7 @@ from aicon.drawer_tutorial.robosuite_drawer_env import DrawerOpenEnv
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
 from aicon.middleware.python_sequential import build_components, run_component_sequence
 from aicon.drawer_tutorial.Experiment_store import ExperimentStore, _hash_config
+from aicon.drawer_tutorial.initial_qpos import initial_qpos_list
 
 import time
 
@@ -460,10 +461,11 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
 
     try:
         for run in range(NUM_TRIALS_PER_JOB):
-            if run < len(Visible_Initial_qpos_list):
-                initial_panda_qpos = Visible_Initial_qpos_list[run]
-            else:
-                initial_panda_qpos = Invisible_Initial_qpos_list[run - len(Visible_Initial_qpos_list)]
+            # if run < len(Visible_Initial_qpos_list):
+            #     initial_panda_qpos = Visible_Initial_qpos_list[run]
+            # else:
+            #     initial_panda_qpos = Invisible_Initial_qpos_list[run - len(Visible_Initial_qpos_list)]
+            initial_panda_qpos = initial_qpos_list[run]
             env = setup_env(initial_qpos=initial_panda_qpos)
             set_global_seed(run)
             success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(

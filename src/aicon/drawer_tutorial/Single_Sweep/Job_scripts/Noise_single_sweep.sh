@@ -25,5 +25,5 @@ export OPENBLAS_NUM_THREADS=1
 
 # Ensure logs directory exists and run Python, saving a per-job .out file
 mkdir -p logs_n
-python -u Sweep_hpc.py "$JOB_ID" 0 20
+python -u Sweep_hpc.py "$JOB_ID" --noise-scale 20
 
