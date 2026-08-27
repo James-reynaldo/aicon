@@ -72,7 +72,7 @@ def get_all_jobs():
     return jobs_est + jobs_conn + [standard_job]
 
 
-def main(job_index: int, disturbance: float = None, noise_scale: float = None, prior_noise_std: float = None, prior_noise_std_kinematic: float = None, temp: bool = False):
+def main(job_index: int, disturbance: float = None, noise_scale: float = None, prior_noise_std: float = None, prior_noise_std_kinematic: float = None, temp: bool = False,trial_index: int = None):
     jobs = get_all_jobs()
     print(total_jobs := len(jobs), "total jobs")
     if job_index < 0 or job_index >= len(jobs):
@@ -92,12 +92,13 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
         directory = DATA_DIR_BAD_PRIOR
     elif prior_noise_std_kinematic is not None:
         directory = DATA_DIR_BAD_PRIOR_KINEMATIC
-    elif temp is True:
-        directory = DATA_DIR_TEMP
     else:
         directory = DATA_DIR_NORMAL
     directory.mkdir(exist_ok=True, parents=True)
-    db_path = directory / "experiment_store.db"
+    if temp:
+        db_path = directory / "experiment_store_temp.db"
+    else:
+        db_path = directory / "experiment_store.db"
     store = ExperimentStore(str(db_path))
 
     job_metadata = {
@@ -106,16 +107,25 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
         "label": job["sweep_label"],
         "sweep_value": job["sweep_value"],
         "job_index": job_index,
-        "scenario": "disturbance" if disturbance is not None
-          else "noise" if noise_scale is not None 
-          else "bad_prior" if prior_noise_std is not None 
-          else "bad_prior_kinematic" if prior_noise_std_kinematic is not None 
-          else "normal",
     }
+    if disturbance is not None:
+        job_metadata["disturbance"] = disturbance
+    if noise_scale is not None:
+        job_metadata["noise_scale"] = noise_scale
+    if prior_noise_std is not None:
+        job_metadata["prior_noise_std"] = prior_noise_std
+    if prior_noise_std_kinematic is not None:
+        job_metadata["prior_noise_std_kinematic"] = prior_noise_std_kinematic
     job_metadata.update(job.get("metadata", {}))
 
     try:
         for run in range(NUM_TRIALS_PER_JOB): #5,6,9
+            #only run one trial if trial_index is specified
+            if trial_index is not None:
+                if trial_index < 0 or trial_index >= NUM_TRIALS_PER_JOB:
+                    raise ValueError(f"Invalid trial index {trial_index}")
+                run = trial_index
+                
             # if run < len(Visible_Initial_qpos_list):
             #     initial_panda_qpos = Visible_Initial_qpos_list[run]
             # else:
@@ -181,6 +191,9 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
             ))
 
             print(f"run {run}: success={success}, steps={timesteps}, err={err}")
+            #No need to continue if we are only running a single trial
+            if trial_index is not None:
+                break
             
     finally:
         try:
@@ -200,6 +213,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "job_index",
         type=int,
+    )
+
+    parser.add_argument(
+        "--trial_index",
+        type=int,
+        default=None,
     )
 
     parser.add_argument(
@@ -241,4 +260,5 @@ if __name__ == "__main__":
         prior_noise_std=args.prior_noise_std,
         prior_noise_std_kinematic=args.prior_noise_std_kinematic,
         temp=args.temp,
+        trial_index=args.trial_index
     )

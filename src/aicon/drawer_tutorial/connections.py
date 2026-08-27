@@ -44,7 +44,7 @@ def build_connections(connection_params: dict = None):
                    "DrawerKinematics": lambda device, dtype, mockbuild: KinematicJointConnection("DrawerKinematics", device=device, dtype=dtype, mockbuild=mockbuild),
                    "DrawerDirectMeasurement": lambda device, dtype, mockbuild:DrawerDirectMeasurementConnection("DrawerDirectMeasurement", device=device, dtype=dtype, mockbuild=mockbuild),
                     "ProjectiveGeometry": lambda device, dtype, mockbuild:DrawerCameraEEConnection("ProjectiveGeometry", device=device, dtype=dtype, mockbuild=mockbuild),
-                   "VisibleLikelihood": lambda device, dtype, mockbuild: VisibleEEDrawerConnection("VisibleLikelihood", device=device, dtype=dtype, mockbuild=mockbuild),
+                   "VisibleLikelihood": lambda device, dtype, mockbuild: VisibleEEDrawerConnection("VisibleLikelihood", device=device, dtype=dtype, mockbuild=mockbuild, **connection_params.get("VisibleEEDrawerConnection", {})),
 }
     return connections
 
@@ -211,9 +211,10 @@ class VisibleEEDrawerConnection(ActiveInterconnection):
     """
     Active Interconnection for the drawers visibility likelihood.
     """
-    def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False):
+    def __init__(self, name: str, dtype:Union[torch.dtype, None] = None, device : Union[torch.device, None] = None, mockbuild : bool = False, vis_connection_steepness: float = 1.0):
         super().__init__(name, {"pose_ee": (6,), "uncertainty_ee": (6, 6), "position_drawer": (3,), "uncertainty_drawer": (3, 3), "likelihood_visible_drawer": (1,),}, dtype=dtype,
                          device=device, mockbuild=mockbuild,)
+        self.vis_connection_steepness = vis_connection_steepness
 
 
     def define_implicit_connection_function(self):
@@ -238,7 +239,7 @@ class VisibleEEDrawerConnection(ActiveInterconnection):
                 dtype=position_drawer.dtype,
                 device=position_drawer.device,
             )
-            likelihood = likelihood_func_visible(pose_ee, position_drawer, H_ee_to_cam)
+            likelihood = likelihood_func_visible(pose_ee, position_drawer, H_ee_to_cam, self.vis_connection_steepness)
             return likelihood - likelihood_visible_drawer # produced by VisibleEStimator
 
         return connection_func

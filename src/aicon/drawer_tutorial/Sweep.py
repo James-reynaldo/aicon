@@ -11,7 +11,7 @@ import torch
 from robosuite.utils.transform_utils import quat2mat
 
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion
-from aicon.drawer_tutorial.connections import DistGraspHandConnection
+from aicon.drawer_tutorial.connections import DistGraspHandConnection,VisibleEEDrawerConnection
 from aicon.drawer_tutorial.estimators import (
     DrawerPositionEstimator,
     EEPoseEstimator,
@@ -177,6 +177,7 @@ def get_default_connection_params():
     """Get connection defaults from the constructors used by the experiment builder."""
     return {
         "DistGraspHandConnection": _get_constructor_defaults(DistGraspHandConnection),
+        "VisibleEEDrawerConnection": _get_constructor_defaults(VisibleEEDrawerConnection),
     }
 
 def get_sweep_values(standard_value):

@@ -9,15 +9,24 @@ import numpy as np
 import robosuite as suite
 import torch
 
+from pathlib import Path
+from PIL import Image
+
 from robosuite.utils.transform_utils import quat2mat
 from robosuite.wrappers import VisualizationWrapper
 
 from aicon.drawer_tutorial.experiment_specifications import get_building_functions_basic_drawer_motion, OPEN_VALUE
 from aicon.drawer_tutorial.util import pose_vec_to_homogeneous
+import os
 
-RENDER = True  # Set to True to visualize the environment
-PLOTTER = False  # Set to True to enable live plotting of diagnostics
-MANUAL_CONTROL = False  # Set to True to control the robot manually with keyboard or SpaceMouse
+RENDER = os.getenv("AICON_RENDER", "false").lower() == "true"
+PLOTTER = os.getenv("AICON_PLOTTER", "false").lower() == "true"
+MANUAL_CONTROL = os.getenv("AICON_MANUAL_CONTROL", "false").lower() == "true"
+SAVE_PNG = os.getenv("AICON_SAVE_PNG", "true").lower() == "true"
+
+# RENDER = False  # Set to True to visualize the environment
+# PLOTTER = False  # Set to True to enable live plotting of diagnostics
+# MANUAL_CONTROL = False  # Set to True to control the robot manually with keyboard or SpaceMouse
 
 if RENDER:
     from robosuite.devices import Keyboard, SpaceMouse
@@ -618,6 +627,9 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
               periodic_disturbance_magnitude=0.0, noise_scale=1.0, prior_noise_std =0.01,prior_noise_std_kinematic=0.0,
               render=None, status_label=None):
     """Shared drawer-control loop for the interactive demo and parameter sweeps."""
+    image_dir = Path(__file__).resolve().parent / "demo"
+    if SAVE_PNG:
+        image_dir.mkdir(parents=True, exist_ok=True)
     if reset_on_start:
         env.reset()
     robot = env.robots[0]
@@ -639,7 +651,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
         visualize_grasp_diagnostics=PLOTTER,
         visualize_gradient_trace=PLOTTER,
         visualize_camera_transform=True,
-    ) if render else None
+    ) if render or SAVE_PNG else None
 
     curr_t, step_idx = 0.0, 1
     joint_error = grasp_estimate = float("nan")
@@ -675,6 +687,18 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
                 device=device, robot=robot, active_arm="right", env_configuration="single-arm-opposed"
             )
         obs, reward, done, _ = env.step(action)
+        if SAVE_PNG:
+            # Capture the resulting state
+            img = env.sim.render(
+                camera_name="agentview",
+                width=512,
+                height=512
+            )
+            img = np.flipud(img)
+            filename = image_dir / f"demo_frame_{step_idx:04d}.png"
+            Image.fromarray(img).save(
+                filename
+            )
         base_env = env.env if hasattr(env, "env") else env
         true_joint = float(base_env.sim.data.qpos[base_env.cabinet_qpos_addrs])
         estimated_joint = float(kinematic.quantities["kinematic_joint"][2].item())

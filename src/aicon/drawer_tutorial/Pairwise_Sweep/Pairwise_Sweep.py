@@ -19,22 +19,21 @@ from aicon.drawer_tutorial.initial_qpos import initial_qpos_list
 import time
 
 
-Visible_Initial_qpos_list = [
-np.array([-0.60657486,  0.55208371,  0.01406207, -1.88856343,  1.09944793,  1.29935419,  -0.16385514]), #visible
-np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]), #visible
-np.array([-0.60706375,  0.34607402,  0.09003703, -2.08550184,  1.2520165,   1.49328103,  -0.08097987]), #visible problem too close
-np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]), #visible
-np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]), # invisible
-]
+# Visible_Initial_qpos_list = [
+# np.array([-0.60657486,  0.55208371,  0.01406207, -1.88856343,  1.09944793,  1.29935419,  -0.16385514]), #visible
+# np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]), #visible
+# np.array([-0.60706375,  0.34607402,  0.09003703, -2.08550184,  1.2520165,   1.49328103,  -0.08097987]), #visible problem too close
+# np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]), #visible
+# np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]), # invisible
+# ]
 
-Invisible_Initial_qpos_list = [
-np.array([-0.48750612,  1.17415488,  0.19242183, -1.14334887,  1.13314345,  1.47119768,  0.04283408]),
-np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]), # invisible
-np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]), # invisible at first
-np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]), # invisible
-np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]), #visible
-]
-
+# Invisible_Initial_qpos_list = [
+# np.array([-0.48750612,  1.17415488,  0.19242183, -1.14334887,  1.13314345,  1.47119768,  0.04283408]),
+# np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]), # invisible
+# np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]), # invisible at first
+# np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]), # invisible
+# np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]), #visible
+# ]
 from aicon.drawer_tutorial.Sweep import (
     setup_env,
     run_trial,
@@ -52,6 +51,7 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR_DISTURBANCE = DATA_DIR / "disturbance"
 DATA_DIR_NOISE = DATA_DIR / "noise"
 DATA_DIR_NORMAL = DATA_DIR / "normal"
+DATA_DIR_BAD_PRIOR = DATA_DIR / "bad_prior"
 DB_SHARD_PREFIX = "experiment_store_job_"
 
 # ============================================================================
@@ -170,7 +170,11 @@ SWEEP_CONNECTION_GROUPS = {"DistGraspHandConnection": [
         "time_since_hand_change_threshold",
         "ft_tresh_multiplier",
         "ft_tresh_cap",
-        ],}  # Include connection parameters
+        ],
+        "VisibleEEDrawerConnection": [
+        "vis_connection_steepness",
+        ],
+        }  # Include connection parameters
 # SWEEP_CONNECTION_GROUPS = {"DistGraspHandConnection": ["ft_noise_offset"]}  # Include connection parameters
 
 def get_default_estimator_params():
@@ -303,11 +307,14 @@ def make_compact_id(job: dict) -> str:
     return f"{ts}-{h}"
 
 
-def get_data_directory(disturbance: float = None, noise_scale: float = None) -> Path:
-    if disturbance != 0:
+def get_data_directory(disturbance: float = None, noise_scale: float = None, prior_noise_std: float = None, prior_noise_std_kinematic: float = None) -> Path:
+    if disturbance is not None:
         return DATA_DIR_DISTURBANCE
-    if noise_scale != 0:
+    if noise_scale is not None:
         return DATA_DIR_NOISE
+    if prior_noise_std is not None:
+        return DATA_DIR_BAD_PRIOR
+
     return DATA_DIR_NORMAL
 
 
@@ -411,7 +418,7 @@ def merge_sharded_databases(source_dir: Path, target_db: Path) -> None:
         target_store.close()
 
 
-def main(job_index:int, disturbance:float=None, noise_scale:float=None):
+def main(job_index:int, disturbance:float=None, noise_scale:float=None, prior_noise_std: float = None, prior_noise_std_kinematic: float = None):
     jobs = get_all_jobs()
     print("total jobs:", len(jobs))
     if job_index < 0 or job_index >= len(jobs):
@@ -427,7 +434,7 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
 
     print("trial params:", job["trial_params"])
 
-    directory = get_data_directory(disturbance=disturbance, noise_scale=noise_scale)
+    directory = get_data_directory(disturbance=disturbance, noise_scale=noise_scale, prior_noise_std=prior_noise_std, prior_noise_std_kinematic=prior_noise_std_kinematic)
     directory.mkdir(exist_ok=True, parents=True)
     db_path = get_job_db_path(directory, job_index, job)
 
@@ -455,7 +462,16 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
         "parameters": f"{job['group_name']}.{job['param_name']}",
         "sweep_labels": job["sweep_label"],
         "sweep_values": job["sweep_value"],
+        "job_index": job_index,
     }
+    if disturbance is not None:
+        job_metadata["disturbance"] = disturbance
+    if noise_scale is not None:
+        job_metadata["noise_scale"] = noise_scale
+    if prior_noise_std is not None:
+        job_metadata["prior_noise_std"] = prior_noise_std
+    if prior_noise_std_kinematic is not None:
+        job_metadata["prior_noise_std_kinematic"] = prior_noise_std_kinematic
 
     job_metadata.update(job.get("metadata", {}))
 
@@ -468,19 +484,32 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None):
             initial_panda_qpos = initial_qpos_list[run]
             env = setup_env(initial_qpos=initial_panda_qpos)
             set_global_seed(run)
+            trial_kwargs = {
+                "estimator_params": job["trial_params"],
+                "max_timesteps": MAX_TIMESTEPS,
+                "sweep_label": job["sweep_label"],
+                "group_name": job["group_name"],
+                "param_name": job["param_name"],
+                "sweep_value": job["sweep_value"],
+                "random_init_time": RANDOM_INIT_TIME,
+                "random_std": 1,
+            }
+            # Only pass these if they were actually specified
+            if disturbance is not None:
+                trial_kwargs["disturbance"] = disturbance
+
+            if noise_scale is not None:
+                trial_kwargs["noise_scale"] = noise_scale
+
+            if prior_noise_std is not None:
+                trial_kwargs["prior_noise_std"] = prior_noise_std
+
+            if prior_noise_std_kinematic is not None:
+                trial_kwargs["prior_noise_std_kinematic"] = prior_noise_std_kinematic
             success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
                 env,
-                estimator_params=job["trial_params"],
-                max_timesteps=MAX_TIMESTEPS,
-                sweep_label=job["sweep_label"],
-                group_name=job["group_name"],
-                param_name=job["param_name"],
-                sweep_value=job["sweep_value"],
-                random_init_time=RANDOM_INIT_TIME,
-                random_std=1,
-                disturbance=disturbance,
-                noise_scale=noise_scale
-            )
+                **trial_kwargs
+            )   
 
             store.add_trial(
                 params=job["trial_params"],
@@ -681,9 +710,34 @@ def find_jobs_by_config_id(config_id: str, limit: int = 50) -> list[dict]:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run or query pairwise sweep jobs.")
-    parser.add_argument("job_index", nargs="?", type=int, help="Job index to run")
-    parser.add_argument("disturbance", nargs="?", type=float, default=0)
-    parser.add_argument("noise_scale", nargs="?", type=float, default=0)
+    parser.add_argument(
+        "job_index",
+        type=int,
+    )
+
+    parser.add_argument(
+        "--disturbance",
+        type=float,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--noise-scale",
+        type=float,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--prior-noise-std",
+        type=float,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--prior-noise-std-kinematic",
+        type=float,
+        default=None,
+    )
 
     parser.add_argument("--count-jobs", action="store_true", help="Print number of jobs")
     parser.add_argument("--find-jobs", action="store_true", help="Find job indices by filters")
@@ -756,4 +810,10 @@ if __name__ == "__main__":
     if args.job_index is None:
         parser.error("job_index is required unless --count-jobs or --find-jobs/--find-json is used")
 
-    main(args.job_index, disturbance=args.disturbance, noise_scale=args.noise_scale)
+    main(
+        args.job_index,
+        disturbance=args.disturbance,
+        noise_scale=args.noise_scale,
+        prior_noise_std=args.prior_noise_std,
+        prior_noise_std_kinematic=args.prior_noise_std_kinematic,
+    )   
