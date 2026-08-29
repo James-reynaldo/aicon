@@ -195,6 +195,20 @@ def _get_matplotlib_pyplot():
     return plt
 
 ONE_D_LABELS_TO_INCLUDE = {"0.2x", "0.5x", "2x", "5x", "standard"}
+IGNORED_PARAMETERS = {
+    "grasp_likelihood.initial_clip_max",
+    "grasp_likelihood.initial_clip_min",
+}
+
+
+def is_ignored_parameter(parameter):
+    return parameter in IGNORED_PARAMETERS
+
+
+def filter_ignored_parameter_values(mapping):
+    if not isinstance(mapping, dict):
+        return mapping
+    return {parameter: value for parameter, value in mapping.items() if not is_ignored_parameter(parameter)}
 
 
 def short_label(label):
@@ -247,13 +261,43 @@ def parse_pair(metadata):
     return None
 
 
-def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=False):
+def _filter_rows_by_trial_window(rows, trial_window="all"):
+    """Restrict each run to all / first-5 / last-5 trials by seed ordering."""
+    if trial_window == "all":
+        return rows
+
+    grouped = defaultdict(list)
+    for row in rows:
+        if not isinstance(row, (tuple, list)) or len(row) < 2:
+            continue
+        config_id = row[0]
+        seed = row[1]
+        try:
+            seed_value = int(seed)
+        except (TypeError, ValueError):
+            continue
+        grouped[str(config_id)].append((seed_value, row))
+
+    filtered = []
+    for entries in grouped.values():
+        entries.sort(key=lambda item: item[0])
+        if trial_window == "first5":
+            selected = entries[:5]
+        elif trial_window == "last5":
+            selected = entries[-5:]
+        else:
+            selected = entries
+        filtered.extend(row for _, row in selected)
+    return filtered
+
+
+def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=False, trial_window="all"):
     conn = sqlite3.connect(db_path)
     try:
         if metrics == "success":
             rows = conn.execute(
                 """
-                SELECT t.success, t.metadata
+                SELECT t.config_id, t.seed, t.success, t.metadata
                 FROM trials t
                 WHERE t.metadata IS NOT NULL
                 """
@@ -261,7 +305,7 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=F
         elif metrics == "anchor_error":
             rows = conn.execute(
                 """
-                SELECT t.anchor_error, t.success, t.metadata
+                SELECT t.config_id, t.seed, t.anchor_error, t.success, t.metadata
                 FROM trials t
                 WHERE t.metadata IS NOT NULL
                 """
@@ -269,7 +313,7 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=F
         elif metrics == "timesteps":
             rows = conn.execute(
                 """
-                SELECT t.timesteps, t.success, t.metadata
+                SELECT t.config_id, t.seed, t.timesteps, t.success, t.metadata
                 FROM trials t
                 WHERE t.metadata IS NOT NULL
                 """
@@ -277,24 +321,26 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=F
     finally:
         conn.close()
 
+    rows = _filter_rows_by_trial_window(rows, trial_window=trial_window)
+
     # Group pairwise data by (pair, label_a, label_b) to preserve label information
     by_pair_labels = defaultdict(lambda: defaultdict(list))
     by_job = defaultdict(list)
 
     for row in rows:
-        if metrics != "success":
-            # rows are (timesteps, success, metadata)
+        if metrics == "success":
             try:
-                metric_value, success_flag, metadata_json = row
+                _, _, metric_value, metadata_json = row
+            except Exception:
+                continue
+        else:
+            # rows are (config_id, seed, metric, success, metadata)
+            try:
+                _, _, metric_value, success_flag, metadata_json = row
             except Exception:
                 continue
             # Optionally skip failed trials
             if not include_failed_trials and not success_flag:
-                continue
-        else:
-            try:
-                metric_value, metadata_json = row
-            except Exception:
                 continue
         try:
             metadata = json.loads(metadata_json)
@@ -344,11 +390,12 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=F
                 pair_vectors[pair][(label_a, label_b)] = float(np.mean(np.asarray(successes, dtype=float)))
 
     parameters = sorted({param for pair in pair_vectors for param in pair})
+    parameters = [param for param in parameters if not is_ignored_parameter(param)]
 
     return parameters, pair_vectors
 
 
-def read_single_sweep_series(db_path, metrics="success", include_failed_trials=False):
+def read_single_sweep_series(db_path, metrics="success", include_failed_trials=False, trial_window="all"):
     """
     Read 1d sweep trials and compute Si values.
     Returns both Si values and organized success data by parameter and label.
@@ -358,7 +405,7 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
         if metrics == "success":
             rows = conn.execute(
                 """
-                SELECT t.success, t.metadata
+                SELECT t.config_id, t.seed, t.success, t.metadata
                 FROM trials t
                 WHERE t.metadata IS NOT NULL
                 """
@@ -366,7 +413,7 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
         elif metrics == "anchor_error":
             rows = conn.execute(
                 """
-                SELECT t.anchor_error,t.success, t.metadata
+                SELECT t.config_id, t.seed, t.anchor_error, t.success, t.metadata
                 FROM trials t
                 WHERE t.metadata IS NOT NULL
                 """
@@ -374,7 +421,7 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
         elif metrics == "timesteps":
             rows = conn.execute(
                 """
-                SELECT t.timesteps, t.success, t.metadata
+                SELECT t.config_id, t.seed, t.timesteps, t.success, t.metadata
                 FROM trials t
                 WHERE t.metadata IS NOT NULL
                 """
@@ -384,23 +431,25 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
     finally:
         conn.close()
 
+    rows = _filter_rows_by_trial_window(rows, trial_window=trial_window)
+
     # Group by parameter -> label -> list of successes
     by_param_label = defaultdict(lambda: defaultdict(list))
     by_param_sweep = defaultdict(lambda: defaultdict(list))
     standard_baseline_successes = []
 
     for row in rows:
-        if metrics != "success":
+        if metrics == "success":
             try:
-                metric_value, success_flag, metadata_json = row
+                _, _, metric_value, metadata_json = row
             except Exception:
-                continue
-            if not include_failed_trials and not success_flag:
                 continue
         else:
             try:
-                metric_value, metadata_json = row
+                _, _, metric_value, success_flag, metadata_json = row
             except Exception:
+                continue
+            if not include_failed_trials and not success_flag:
                 continue
         try:
             metadata = json.loads(metadata_json)
@@ -463,6 +512,13 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
         elif rates:
             # If only one label mean is available, variance is 0
             si_values[parameter] = 0.0
+
+    si_values = filter_ignored_parameter_values(si_values)
+    one_d_successes_by_parameter = {
+        parameter: {label: value for label, value in label_values.items() if not is_ignored_parameter(parameter)}
+        for parameter, label_values in one_d_successes_by_parameter.items()
+        if not is_ignored_parameter(parameter)
+    }
 
     return si_values, one_d_successes_by_parameter, standard_baseline
 
@@ -732,6 +788,126 @@ def scatter_plot_interaction_vs_total(min_ss_total, parameters, ss_total_table, 
     plt.close(fig)
 
     return residuals_by_pair
+
+
+def compute_window_metrics_summary(db_path, metrics="success", include_failed_trials=False, trial_window="all"):
+    """Compute the standard per-parameter SI and residual summaries for a given trial window."""
+    parameters, pairwise_series = read_pairwise_job_series(
+        db_path,
+        metrics=metrics,
+        include_failed_trials=include_failed_trials,
+        trial_window=trial_window,
+    )
+    si_values, one_d_successes_by_parameter, standard_baseline = read_single_sweep_series(
+        db_path,
+        metrics=metrics,
+        include_failed_trials=include_failed_trials,
+        trial_window=trial_window,
+    )
+    _, _, _, _, augmented_pair_vectors, augmented_pair_diagnostics = compute_hi(
+        parameters, pairwise_series, one_d_successes_by_parameter, standard_baseline
+    )
+    interaction_scores, ss_total_table, ss_ab_table = calculate_ANOVA_interaction_score(
+        parameters, augmented_pair_vectors, augmented_pair_diagnostics
+    )
+
+    max_ssab_s = {}
+    mean_ssab_s = {}
+    for (pa, pb), interaction in ss_ab_table.items():
+        if np.isnan(interaction):
+            continue
+        max_ssab_s[pa] = max(max_ssab_s.get(pa, -np.inf), interaction)
+        max_ssab_s[pb] = max(max_ssab_s.get(pb, -np.inf), interaction)
+        mean_ssab_s[pa] = mean_ssab_s.get(pa, []) + [max(0, interaction)]
+        mean_ssab_s[pb] = mean_ssab_s.get(pb, []) + [max(0, interaction)]
+    mean_ssab_s = {p: float(np.mean(vals)) for p, vals in mean_ssab_s.items()} if mean_ssab_s else {}
+    parameters = [parameter for parameter in parameters if not is_ignored_parameter(parameter)]
+    si_values = filter_ignored_parameter_values(si_values)
+    max_ssab_s = filter_ignored_parameter_values(max_ssab_s)
+    mean_ssab_s = filter_ignored_parameter_values(mean_ssab_s)
+
+    return parameters, si_values, max_ssab_s, mean_ssab_s, ss_ab_table, ss_total_table
+
+
+def plot_early_vs_late_scatter(
+    x_values,
+    y_values,
+    labels,
+    x_label,
+    y_label,
+    title,
+    output_path,
+):
+    plt = _get_matplotlib_pyplot()
+    from matplotlib.lines import Line2D
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    xs = np.asarray(list(x_values), dtype=float)
+    ys = np.asarray(list(y_values), dtype=float)
+    finite = np.isfinite(xs) & np.isfinite(ys)
+    xs = xs[finite]
+    ys = ys[finite]
+    labels = [label for label, keep in zip(labels, finite) if keep]
+
+    catalog_rows = []
+    for index, (label, x_val, y_val) in enumerate(zip(labels, xs, ys), start=1):
+        catalog_rows.append({"point_number": index, "parameter": label, x_label: float(x_val), y_label: float(y_val)})
+
+    if xs.size:
+        max_extent = float(np.nanmax(np.maximum(np.abs(xs), np.abs(ys)))) if xs.size else 1.0
+        pad = max_extent * 0.1 if max_extent > 0 else 0.1
+        lower = min(0.0, float(np.nanmin(np.concatenate([xs, ys])))) - pad
+        upper = max(0.0, float(np.nanmax(np.concatenate([xs, ys])))) + pad
+        if upper <= lower:
+            upper = lower + 1.0
+    else:
+        lower, upper = 0.0, 1.0
+
+    ax.set_xlim(lower, upper)
+    ax.set_ylim(lower, upper)
+    ax.set_aspect("equal", adjustable="box")
+    ax.plot([lower, upper], [lower, upper], linestyle="--", color="gray", linewidth=1.0, alpha=0.8)
+
+    group_names = [label.split(".", 1)[0] if "." in label else label for label in labels]
+    colour_map = {group_name: plt.get_cmap("tab10")(idx % 10) for idx, group_name in enumerate(dict.fromkeys(group_names))}
+    for idx, (label, x_val, y_val) in enumerate(zip(labels, xs, ys), start=1):
+        group_name = label.split(".", 1)[0] if "." in label else label
+        ax.scatter(
+            [x_val],
+            [y_val],
+            color=colour_map[group_name],
+            edgecolors="black",
+            linewidth=0.5,
+            s=60,
+            zorder=3,
+        )
+        ax.annotate(str(idx), (x_val, y_val), xytext=(5, 5), textcoords="offset points", fontsize=8, color="black")
+
+    handles = [
+        Line2D([0], [0], marker='o', color='w', label=group_name,
+               markerfacecolor=colour_map[group_name], markeredgecolor='black', markersize=8)
+        for group_name in dict.fromkeys(group_names)
+    ]
+    if handles:
+        ax.legend(handles=handles, title="Group", loc="lower right", fontsize=8)
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    ax.grid(True, linestyle="--", linewidth=0.4, alpha=0.4)
+
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
+    catalog_path = output_path.with_name(f"{output_path.stem}_catalog.csv")
+    with open(catalog_path, "w", encoding="utf-8", newline="") as fh:
+        import csv
+        fieldnames = ["point_number", "parameter", x_label, y_label]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(catalog_rows)
 
 
 def plot_si_vs_residuals(
@@ -1711,13 +1887,17 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     parameters, pairwise_series = read_pairwise_job_series(
-        db_path, metrics=args.metric, include_failed_trials=args.include_failed_trials
+        db_path,
+        metrics=args.metric,
+        include_failed_trials=args.include_failed_trials,
     )
 
 
     # Read single sweep data for Si values and 1D parameter data
     si_values, one_d_successes_by_parameter, standard_baseline = read_single_sweep_series(
-        db_path, metrics=args.metric, include_failed_trials=args.include_failed_trials
+        db_path,
+        metrics=args.metric,
+        include_failed_trials=args.include_failed_trials,
     )
     # Print single-sweep standard deviations (S_i) for key parameters for debugging
     target_params = [
@@ -1760,7 +1940,7 @@ def main():
 
     min_ss_total = 1e-6 # just as long as not zero, to avoid division by zero in interaction score calculation
 
-    scatter_plot_interaction_vs_total(min_ss_total, parameters, ss_total_table, ss_ab_table, output_dir / "interaction_vs_total.png")
+    # scatter_plot_interaction_vs_total(min_ss_total, parameters, ss_total_table, ss_ab_table, output_dir / "interaction_vs_total.png")
 
     # if file already exists don't overwrite it, just print a message and skip
     heatmap_path = output_dir / "ss_ab_heatmap.png"
@@ -1769,11 +1949,11 @@ def main():
     else:
         heatmap_ss_ab(ss_ab_table, heatmap_path)
 
-    mean_heatmap_path = output_dir / "pair_mean_heatmap.png"
-    if mean_heatmap_path.exists():
-        print(f"Heatmap file already exists: {mean_heatmap_path}. Skipping mean heatmap generation.")
-    else:
-        heatmap_pair_means(augmented_pair_vectors, mean_heatmap_path)
+    # mean_heatmap_path = output_dir / "pair_mean_heatmap.png"
+    # if mean_heatmap_path.exists():
+    #     print(f"Heatmap file already exists: {mean_heatmap_path}. Skipping mean heatmap generation.")
+    # else:
+    #     heatmap_pair_means(augmented_pair_vectors, mean_heatmap_path)
 
     valid_pairs = {
         pair: score
@@ -1802,140 +1982,140 @@ def main():
 
 
     #calculte rolling average
-    window_size = 5
-    mean_ssab_deriv_rolling = np.convolve(mean_ssab_deriv, np.ones(window_size)/window_size, mode='valid')
-    max_ssab_deriv_rolling = np.convolve(max_ssab_deriv, np.ones(window_size)/window_size, mode='valid')
+    # window_size = 5
+    # mean_ssab_deriv_rolling = np.convolve(mean_ssab_deriv, np.ones(window_size)/window_size, mode='valid')
+    # max_ssab_deriv_rolling = np.convolve(max_ssab_deriv, np.ones(window_size)/window_size, mode='valid')
     
-    from scipy.stats import median_abs_deviation
+    # from scipy.stats import median_abs_deviation
 
-    # --------------------------------------------------
-    # Estimate epsilon from the plateau (last 50 points)
-    # --------------------------------------------------
-    tail = np.abs(max_ssab_deriv_rolling[-50:])
+    # # --------------------------------------------------
+    # # Estimate epsilon from the plateau (last 50 points)
+    # # --------------------------------------------------
+    # tail = np.abs(max_ssab_deriv_rolling[-50:])
 
-    eps = np.median(tail) + 3 * median_abs_deviation(tail)
+    # eps = np.median(tail) + 3 * median_abs_deviation(tail)
 
-    print(f"Epsilon = {eps:.5f}")
+    # print(f"Epsilon = {eps:.5f}")
 
-    # --------------------------------------------------
-    # Find first sustained plateau
-    # --------------------------------------------------
-    plateau_index = None
-    for i in range(len(max_ssab_deriv_rolling) - window_size):
-        if np.all(np.abs(max_ssab_deriv_rolling[i:i+window_size]) < eps):
-            plateau_index = i
-            break
+    # # --------------------------------------------------
+    # # Find first sustained plateau
+    # # --------------------------------------------------
+    # plateau_index = None
+    # for i in range(len(max_ssab_deriv_rolling) - window_size):
+    #     if np.all(np.abs(max_ssab_deriv_rolling[i:i+window_size]) < eps):
+    #         plateau_index = i
+    #         break
 
-    print(f"Plateau starts at rank {plateau_index}")
+    # print(f"Plateau starts at rank {plateau_index}")
 
     # --------------------------------------------------
     # Find SI plateau index if SI_SEPERATE is True
     # --------------------------------------------------
-    plateau_index_si = None
-    plt = _get_matplotlib_pyplot()
-    if SI_SEPERATE:
-        # Get SI values sorted in descending order
-        si_sorted_values = sorted(si_values.values(), reverse=True)
+    # plateau_index_si = None
+    # plt = _get_matplotlib_pyplot()
+    # if SI_SEPERATE:
+    #     # Get SI values sorted in descending order
+    #     si_sorted_values = sorted(si_values.values(), reverse=True)
         
-        # Filter out zeros and near-zero values (keep only values > 1e-6)
-        si_nonzero_values = np.array([v for v in si_sorted_values if v > 1e-6])
+    #     # Filter out zeros and near-zero values (keep only values > 1e-6)
+    #     si_nonzero_values = np.array([v for v in si_sorted_values if v > 1e-6])
         
-        if len(si_nonzero_values) > window_size:
-            # Calculate derivatives of the non-zero SI values
-            si_deriv = np.diff(si_nonzero_values)
-            si_deriv_rolling = np.convolve(si_deriv, np.ones(window_size)/window_size, mode='valid')
+    #     if len(si_nonzero_values) > window_size:
+    #         # Calculate derivatives of the non-zero SI values
+    #         si_deriv = np.diff(si_nonzero_values)
+    #         si_deriv_rolling = np.convolve(si_deriv, np.ones(window_size)/window_size, mode='valid')
             
-            # Estimate epsilon for SI plateau detection using last 20% of non-zero values
-            tail_si = np.abs(si_deriv_rolling[-10:])  # Last 10 points of the rolling derivative
-            if len(tail_si) > 0:
-                eps_si = np.median(tail_si) + 3 * median_abs_deviation(tail_si) if len(tail_si) > 1 else np.median(tail_si)
-            else:
-                eps_si = np.median(np.abs(si_deriv_rolling)) + 3 * median_abs_deviation(np.abs(si_deriv_rolling))
+    #         # Estimate epsilon for SI plateau detection using last 20% of non-zero values
+    #         tail_si = np.abs(si_deriv_rolling[-10:])  # Last 10 points of the rolling derivative
+    #         if len(tail_si) > 0:
+    #             eps_si = np.median(tail_si) + 3 * median_abs_deviation(tail_si) if len(tail_si) > 1 else np.median(tail_si)
+    #         else:
+    #             eps_si = np.median(np.abs(si_deriv_rolling)) + 3 * median_abs_deviation(np.abs(si_deriv_rolling))
             
-            print(f"SI Epsilon = {eps_si:.5f}")
+    #         print(f"SI Epsilon = {eps_si:.5f}")
             
-            # Find first sustained plateau in non-zero region
-            for i in range(len(si_deriv_rolling) - window_size):
-                if np.all(np.abs(si_deriv_rolling[i:i+window_size]) < eps_si):
-                    plateau_index_si = i
-                    break
+    #         # Find first sustained plateau in non-zero region
+    #         for i in range(len(si_deriv_rolling) - window_size):
+    #             if np.all(np.abs(si_deriv_rolling[i:i+window_size]) < eps_si):
+    #                 plateau_index_si = i
+    #                 break
             
-            print(f"SI Plateau starts at rank {plateau_index_si}")
+    #         print(f"SI Plateau starts at rank {plateau_index_si}")
             
-            # Plot SI derivative
-            fig_si, ax_si = plt.subplots(figsize=(10, 5))
-            ax_si.plot(range(len(si_deriv)), si_deriv, label="SI Derivative", color="green")
-            ax_si.plot(range(len(si_deriv_rolling)), si_deriv_rolling, label="SI Derivative (Rolling Avg)", color="green", linestyle="--")
-            ax_si.axhline(0, color="black", linestyle="--", linewidth=1.0)
-            if plateau_index_si is not None:
-                ax_si.axvline(plateau_index_si, color="red", linestyle="--", label=f"SI Plateau starts at rank {plateau_index_si}")
-                y_min, y_max = ax_si.get_ylim()
-                y_middle = (y_min + y_max) / 2
-                ax_si.text(
-                    plateau_index_si,
-                    y_middle,
-                    f"SI Plateau\nrank = {plateau_index_si}",
-                    color="red",
-                    rotation=90,
-                    verticalalignment="top",
-                    horizontalalignment="right",
-                    fontsize=10,
-                    bbox=dict(alpha=0.3)
-                )
-            ax_si.set_xlabel("Non-Zero SI Rank")
-            ax_si.set_ylabel("Derivative of SI")
-            ax_si.set_title("Derivative of SI (Non-Zero Values)")
-            ax_si.legend()
-            fig_si.tight_layout()
-            fig_si.savefig(output_dir / "si_derivative.png", dpi=200)
+    #         # Plot SI derivative
+    #         fig_si, ax_si = plt.subplots(figsize=(10, 5))
+    #         ax_si.plot(range(len(si_deriv)), si_deriv, label="SI Derivative", color="green")
+    #         ax_si.plot(range(len(si_deriv_rolling)), si_deriv_rolling, label="SI Derivative (Rolling Avg)", color="green", linestyle="--")
+    #         ax_si.axhline(0, color="black", linestyle="--", linewidth=1.0)
+    #         if plateau_index_si is not None:
+    #             ax_si.axvline(plateau_index_si, color="red", linestyle="--", label=f"SI Plateau starts at rank {plateau_index_si}")
+    #             y_min, y_max = ax_si.get_ylim()
+    #             y_middle = (y_min + y_max) / 2
+    #             ax_si.text(
+    #                 plateau_index_si,
+    #                 y_middle,
+    #                 f"SI Plateau\nrank = {plateau_index_si}",
+    #                 color="red",
+    #                 rotation=90,
+    #                 verticalalignment="top",
+    #                 horizontalalignment="right",
+    #                 fontsize=10,
+    #                 bbox=dict(alpha=0.3)
+    #             )
+    #         ax_si.set_xlabel("Non-Zero SI Rank")
+    #         ax_si.set_ylabel("Derivative of SI")
+    #         ax_si.set_title("Derivative of SI (Non-Zero Values)")
+    #         ax_si.legend()
+    #         fig_si.tight_layout()
+    #         fig_si.savefig(output_dir / "si_derivative.png", dpi=200)
 
     #plot the derivative of max_ssab_s as a line plot
-    fig, ax = plt.subplots(figsize=(10, 5))
-    # ax.plot(range(len(mean_ssab_deriv)), mean_ssab_deriv, label="Mean ssab Derivative", color="blue")
-    ax.plot(range(len(max_ssab_deriv)), max_ssab_deriv, label="Max ssab Derivative", color="orange")
-    # ax.plot(range(len(mean_ssab_deriv_rolling)), mean_ssab_deriv_rolling, label="Mean ssab Derivative (Rolling Avg)", color="blue", linestyle="--")
-    ax.plot(range(len(max_ssab_deriv_rolling)), max_ssab_deriv_rolling, label="Max ssab Derivative (Rolling Avg)", color="orange", linestyle="--")
-    ax.axhline(0, color="black", linestyle="--", linewidth=1.0)
-    if plateau_index is not None:
-        ax.axvline(plateau_index, color="red", linestyle="--", label=f"Plateau starts at rank {plateau_index}")
-        y_min, y_max = ax.get_ylim()
-        y_middle = (y_min + y_max) / 2
-        # Print plateau index value on the plot
-        ax.text(
-            plateau_index,
-            y_middle,
-            f"Plateau\nrank = {plateau_index}",
-            color="red",
-            rotation=90,
-            verticalalignment="top",
-            horizontalalignment="right",
-            fontsize=10,
-            bbox=dict(alpha=0.3)
-        )
-    ax.set_xlabel("Parameter Rank")
-    ax.set_ylabel("Derivative of ssab")
-    ax.set_title("Derivative of Max ssab per Parameter")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(output_dir / "ssab_derivative.png", dpi=200)
+    # fig, ax = plt.subplots(figsize=(10, 5))
+    # # ax.plot(range(len(mean_ssab_deriv)), mean_ssab_deriv, label="Mean ssab Derivative", color="blue")
+    # ax.plot(range(len(max_ssab_deriv)), max_ssab_deriv, label="Max ssab Derivative", color="orange")
+    # # ax.plot(range(len(mean_ssab_deriv_rolling)), mean_ssab_deriv_rolling, label="Mean ssab Derivative (Rolling Avg)", color="blue", linestyle="--")
+    # ax.plot(range(len(max_ssab_deriv_rolling)), max_ssab_deriv_rolling, label="Max ssab Derivative (Rolling Avg)", color="orange", linestyle="--")
+    # ax.axhline(0, color="black", linestyle="--", linewidth=1.0)
+    # if plateau_index is not None:
+    #     ax.axvline(plateau_index, color="red", linestyle="--", label=f"Plateau starts at rank {plateau_index}")
+    #     y_min, y_max = ax.get_ylim()
+    #     y_middle = (y_min + y_max) / 2
+    #     # Print plateau index value on the plot
+    #     ax.text(
+    #         plateau_index,
+    #         y_middle,
+    #         f"Plateau\nrank = {plateau_index}",
+    #         color="red",
+    #         rotation=90,
+    #         verticalalignment="top",
+    #         horizontalalignment="right",
+    #         fontsize=10,
+    #         bbox=dict(alpha=0.3)
+    #     )
+    # ax.set_xlabel("Parameter Rank")
+    # ax.set_ylabel("Derivative of ssab")
+    # ax.set_title("Derivative of Max ssab per Parameter")
+    # ax.legend()
+    # fig.tight_layout()
+    # fig.savefig(output_dir / "ssab_derivative.png", dpi=200)
 
-    sorted_value_plot(
-            max_ssab_s,
-            title="Sorted Maximum SS_ab per Parameter",
-            ylabel="Max SS_ab",
-            output_path=output_dir / "max_ssab_sorted.png",
-            log_scale=True,
-            knee=None
-        )
+    # sorted_value_plot(
+    #         max_ssab_s,
+    #         title="Sorted Maximum SS_ab per Parameter",
+    #         ylabel="Max SS_ab",
+    #         output_path=output_dir / f"max_ssab_sorted_{args.trial_window}.png",
+    #         log_scale=True,
+    #         knee=None
+    #     )
 
-    sorted_value_plot(
-            mean_ssab_s,
-            title="Sorted Mean SS_ab per Parameter",
-            ylabel="Mean SS_ab",
-            output_path=output_dir / "mean_ssab_sorted.png",
-            log_scale=True,
-            knee=None
-        )
+    # sorted_value_plot(
+    #         mean_ssab_s,
+    #         title="Sorted Mean SS_ab per Parameter",
+    #         ylabel="Mean SS_ab",
+    #         output_path=output_dir / f"mean_ssab_sorted_{args.trial_window}.png",
+    #         log_scale=True,
+    #         knee=None
+    #     )
 
     if SI_SEPERATE:
         sorted_value_plot(
@@ -1946,6 +2126,45 @@ def main():
                 log_scale=True,
                 knee=plateau_index_si
             )
+
+    # Early-vs-late comparison for sensitivity and residual magnitude.
+    early_parameters, early_si_values, early_max_ssab_s, early_mean_ssab_s, _, _ = compute_window_metrics_summary(
+        db_path,
+        metrics=args.metric,
+        include_failed_trials=args.include_failed_trials,
+        trial_window="first5",
+    )
+    late_parameters, late_si_values, late_max_ssab_s, late_mean_ssab_s, _, _ = compute_window_metrics_summary(
+        db_path,
+        metrics=args.metric,
+        include_failed_trials=args.include_failed_trials,
+        trial_window="last5",
+    )
+
+    comparison_parameters = sorted(set(early_parameters) | set(late_parameters))
+    si_early = {parameter: early_si_values.get(parameter, np.nan) for parameter in comparison_parameters}
+    si_late = {parameter: late_si_values.get(parameter, np.nan) for parameter in comparison_parameters}
+    residual_early = {parameter: early_max_ssab_s.get(parameter, np.nan) for parameter in comparison_parameters}
+    residual_late = {parameter: late_max_ssab_s.get(parameter, np.nan) for parameter in comparison_parameters}
+
+    plot_early_vs_late_scatter(
+        [si_early.get(param, np.nan) for param in comparison_parameters],
+        [si_late.get(param, np.nan) for param in comparison_parameters],
+        comparison_parameters,
+        "S_early",
+        "S_late",
+        "Sensitivity: Early vs Late",
+        output_dir / "sensitivity_early_vs_late.png",
+    )
+    plot_early_vs_late_scatter(
+        [residual_early.get(param, np.nan) for param in comparison_parameters],
+        [residual_late.get(param, np.nan) for param in comparison_parameters],
+        comparison_parameters,
+        "residual_early",
+        "residual_late",
+        "Residual: Early vs Late",
+        output_dir / "residual_early_vs_late.png",
+    )
 
     highlight_groups = [
         [item.strip() for item in group.split(",") if item.strip()]
@@ -1970,26 +2189,26 @@ def main():
     )
 
     #get top "plateau index" number of parameters by max_ssab_s
-    top_parameters = sorted(parameters, key=lambda p: max_ssab_s.get(p, -np.inf), reverse=True)[:plateau_index]
+    # top_parameters = sorted(parameters, key=lambda p: max_ssab_s.get(p, -np.inf), reverse=True)[:plateau_index]
 
-    # Find the strongest interaction partner for every selected parameter.
-    top_parameter_pairs = []
-    for parameter in top_parameters:
-        best_match = max(
-            (
-                (interaction, pb if pa == parameter else pa)
-                for (pa, pb), interaction in ss_ab_table.items()
-                if parameter in (pa, pb) and not np.isnan(interaction)
-            ),
-            default=None,
-            key=lambda match: match[0],
-        )
-        if best_match is not None:
-            score, partner = best_match
-            top_parameter_pairs.append((parameter, partner, score))
+    # # Find the strongest interaction partner for every selected parameter.
+    # top_parameter_pairs = []
+    # for parameter in top_parameters:
+    #     best_match = max(
+    #         (
+    #             (interaction, pb if pa == parameter else pa)
+    #             for (pa, pb), interaction in ss_ab_table.items()
+    #             if parameter in (pa, pb) and not np.isnan(interaction)
+    #         ),
+    #         default=None,
+    #         key=lambda match: match[0],
+    #     )
+    #     if best_match is not None:
+    #         score, partner = best_match
+    #         top_parameter_pairs.append((parameter, partner, score))
 
     # Output each parameter, its strongest partner, and interaction score.
-    create_table(top_parameter_pairs, output_dir / "high_interaction_pairs.png")
+    # create_table(top_parameter_pairs, output_dir / "high_interaction_pairs.png")
 
     #plot also number of zeros in the mean_ssab_s for each parameter
     num_zeros_per_param = {p: 0 for p in parameters}
@@ -1997,14 +2216,14 @@ def main():
         if np.isnan(interaction) or interaction <= 0:
             num_zeros_per_param[pa] += 1
             num_zeros_per_param[pb] += 1
-    plot_histogram(
-        list(num_zeros_per_param.values()),
-        title="Histogram of Number of Zero Interaction Residuals per Parameter",
-        xlabel="Number of Zero Interaction Residuals",
-        ylabel="Frequency",
-        num_zeros=0,
-        output_path=output_dir / "num_zero_interaction_residuals_histogram.png"
-    )
+    # plot_histogram(
+    #     list(num_zeros_per_param.values()),
+    #     title="Histogram of Number of Zero Interaction Residuals per Parameter",
+    #     xlabel="Number of Zero Interaction Residuals",
+    #     ylabel="Frequency",
+    #     num_zeros=0,
+    #     output_path=output_dir / "num_zero_interaction_residuals_histogram.png"
+    # )
 
 if __name__ == "__main__":
     main()
