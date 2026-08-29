@@ -7,6 +7,48 @@ from typing import Dict, Any, List, Optional
 import numpy as np
 
 
+def _canonicalize_trace(trace: Any) -> Optional[str]:
+    """Convert a trace into a canonical JSON string for deterministic hashing."""
+    if trace is None:
+        return None
+    if isinstance(trace, np.ndarray):
+        data = trace.tolist()
+    elif isinstance(trace, (list, tuple)):
+        data = list(trace)
+    elif isinstance(trace, dict):
+        data = {str(k): _canonicalize_trace(v) if isinstance(v, (list, tuple, dict, np.ndarray)) else v for k, v in trace.items()}
+    elif isinstance(trace, str):
+        data = trace
+    else:
+        try:
+            data = json.loads(json.dumps(trace))
+        except TypeError:
+            data = str(trace)
+    try:
+        return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except TypeError:
+        return json.dumps(str(data), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _trace_hash(trace: Any) -> Optional[str]:
+    canonical = _canonicalize_trace(trace)
+    if canonical is None:
+        return None
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _stable_trace_id(trace_hash: str) -> int:
+    """Return a deterministic integer id derived from the trace hash.
+
+    This keeps trace identity stable across shards and merged databases instead of
+    depending on each SQLite database's local AUTOINCREMENT sequence.
+    """
+    # Use the first 8 bytes as a 64-bit positive integer, with a small collision
+    # guard if the value is already taken in the catalog.
+    digest = hashlib.sha256(trace_hash.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=False) & ((1 << 63) - 1)
+
+
 # ----------------------------
 # Utilities
 # ----------------------------
@@ -99,6 +141,14 @@ class ExperimentStore:
             )
             """)
 
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS trace_catalog (
+                trace_id INTEGER PRIMARY KEY,
+                trace_hash TEXT UNIQUE NOT NULL,
+                trace_text TEXT NOT NULL
+            )
+            """)
+
             # Trial table: one row per simulation run
             cur.execute("""
             CREATE TABLE IF NOT EXISTS trials (
@@ -110,8 +160,10 @@ class ExperimentStore:
                 error REAL,
                 true_joint REAL,
                 grasp INTEGER,
+                actual_grasped INTEGER,
                 kinematic_axis_error REAL,
                 anchor_error REAL,
+                trace_ids TEXT,
                 metadata TEXT,
                 FOREIGN KEY(config_id) REFERENCES configs(config_id)
             )
@@ -123,9 +175,12 @@ class ExperimentStore:
             if "metadata" not in columns:
                 cur.execute("ALTER TABLE trials ADD COLUMN metadata TEXT")
                 columns = [row[1] for row in self.conn.execute("PRAGMA table_info(trials)").fetchall()]
-            for column_name in ("true_joint", "grasp", "kinematic_axis_error", "anchor_error"):
+            if "trace_ids" not in columns:
+                cur.execute("ALTER TABLE trials ADD COLUMN trace_ids TEXT")
+                columns = [row[1] for row in self.conn.execute("PRAGMA table_info(trials)").fetchall()]
+            for column_name in ("true_joint", "grasp", "actual_grasped", "kinematic_axis_error", "anchor_error"):
                 if column_name not in columns:
-                    column_type = "INTEGER" if column_name == "grasp" else "REAL"
+                    column_type = "INTEGER" if column_name in ("grasp", "actual_grasped") else "REAL"
                     cur.execute(f"ALTER TABLE trials ADD COLUMN {column_name} {column_type}")
                     columns = [row[1] for row in self.conn.execute("PRAGMA table_info(trials)").fetchall()]
             self.conn.commit()
@@ -154,6 +209,81 @@ class ExperimentStore:
     # Insert trial
     # ----------------------------
 
+    def register_trace(self, trace: Any) -> int:
+        """Return a compact integer trace_id for a canonical trace.
+
+        The integer id is derived deterministically from the trace hash so that the
+        same trace receives the same index across separate databases and after shard
+        merges, instead of depending on SQLite AUTOINCREMENT state.
+        """
+        canonical = _canonicalize_trace(trace)
+        trace_hash = _trace_hash(trace)
+        if canonical is None or trace_hash is None:
+            raise ValueError("trace must be non-empty and serializable")
+
+        def _register():
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT trace_id FROM trace_catalog WHERE trace_hash = ?",
+                (trace_hash,),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return int(row[0])
+
+            trace_id = _stable_trace_id(trace_hash)
+            while True:
+                cur.execute(
+                    "SELECT 1 FROM trace_catalog WHERE trace_id = ?",
+                    (trace_id,),
+                )
+                if cur.fetchone() is None:
+                    break
+                trace_id = (trace_id + 1) & ((1 << 63) - 1)
+
+            cur.execute(
+                "INSERT INTO trace_catalog (trace_id, trace_hash, trace_text) VALUES (?, ?, ?)",
+                (trace_id, trace_hash, canonical),
+            )
+            self.conn.commit()
+            return int(trace_id)
+
+        return self._run_with_lock_retry(_register)
+
+    def get_trace_by_id(self, trace_id: int) -> Optional[Dict[str, Any]]:
+        """Return the catalog entry for a given trace_id or None if missing.
+
+        Returns a dict with keys: `trace_id`, `trace_hash`, `trace_text`.
+        """
+        cur = self.conn.cursor()
+        cur.execute("SELECT trace_hash, trace_text FROM trace_catalog WHERE trace_id = ?", (trace_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {"trace_id": int(trace_id), "trace_hash": row[0], "trace_text": row[1]}
+
+    def get_trace_id_by_hash(self, trace_hash: str) -> Optional[int]:
+        """Return the compact trace_id for a given SHA-256 trace_hash, or None if not present."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT trace_id FROM trace_catalog WHERE trace_hash = ?", (trace_hash,))
+        row = cur.fetchone()
+        return int(row[0]) if row is not None else None
+
+    def resolve_trace_ids(self, trace_ids: Optional[List[int]]) -> List[Optional[str]]:
+        """Resolve a list of integer trace_ids into their canonical trace_text strings.
+
+        Returns a list with the same length as `trace_ids`. Missing ids map to None.
+        """
+        if not trace_ids:
+            return []
+        cur = self.conn.cursor()
+        results = []
+        for tid in trace_ids:
+            cur.execute("SELECT trace_text FROM trace_catalog WHERE trace_id = ?", (tid,))
+            row = cur.fetchone()
+            results.append(row[0] if row is not None else None)
+        return results
+
     def add_trial(
         self,
         params: Dict[str, Any],
@@ -162,13 +292,16 @@ class ExperimentStore:
         timesteps: int,
         error: Optional[float] = None,
         grasp: Optional[bool] = None,
+        actual_grasped: Optional[bool] = None,
         kinematic_axis_error: Optional[float] = None,
         anchor_error: Optional[float] = None,
         true_joint: Optional[float] = None,
+        trace_ids: Optional[List[int]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ):
         config_id = _hash_config(params)
         metadata_json = None if metadata is None else json.dumps(metadata)
+        trace_ids_json = None if trace_ids is None else json.dumps(trace_ids)
 
         def _insert_trial():
             cur = self.conn.cursor()
@@ -196,6 +329,9 @@ class ExperimentStore:
             if "grasp" in trial_columns:
                 insert_columns.append("grasp")
                 insert_values.append(None if grasp is None else int(grasp))
+            if "actual_grasped" in trial_columns:
+                insert_columns.append("actual_grasped")
+                insert_values.append(None if actual_grasped is None else int(actual_grasped))
             if "kinematic_axis_error" in trial_columns:
                 insert_columns.append("kinematic_axis_error")
                 insert_values.append(None if kinematic_axis_error is None else float(kinematic_axis_error))
@@ -205,6 +341,9 @@ class ExperimentStore:
             if "true_joint" in trial_columns:
                 insert_columns.append("true_joint")
                 insert_values.append(None if true_joint is None else float(true_joint))
+            if "trace_ids" in trial_columns:
+                insert_columns.append("trace_ids")
+                insert_values.append(trace_ids_json)
             if "metadata" in trial_columns:
                 insert_columns.append("metadata")
                 insert_values.append(metadata_json)

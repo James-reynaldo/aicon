@@ -375,37 +375,103 @@ def merge_sharded_databases(source_dir: Path, target_db: Path) -> None:
             try:
                 target_store.conn.execute("ATTACH DATABASE ? AS srcdb", (str(shard_path),))
                 target_store.conn.execute("BEGIN")
+
+                # Merge configs
                 target_store.conn.execute(
                     "INSERT OR IGNORE INTO configs (config_id, params) SELECT config_id, params FROM srcdb.configs"
                 )
-                target_store.conn.execute(
-                    """
-                    INSERT INTO trials (
-                        config_id,
-                        seed,
-                        success,
-                        timesteps,
-                        error,
-                        grasp,
-                        kinematic_axis_error,
-                        anchor_error,
-                        true_joint,
-                        metadata
+
+                # Merge trace_catalog: ensure every src trace_hash exists in target and build mapping
+                src_trace_rows = target_store.conn.execute(
+                    "SELECT name FROM srcdb.sqlite_master WHERE type='table' AND name='trace_catalog'"
+                ).fetchone()
+                src_to_target_trace = {}
+                if src_trace_rows is not None:
+                    rows = target_store.conn.execute(
+                        "SELECT trace_id, trace_hash, trace_text FROM srcdb.trace_catalog"
+                    ).fetchall()
+                    for src_id, trace_hash, trace_text in rows:
+                        cur = target_store.conn.execute(
+                            "SELECT trace_id FROM trace_catalog WHERE trace_hash = ?",
+                            (trace_hash,)
+                        ).fetchone()
+                        if cur is not None:
+                            target_id = int(cur[0])
+                        else:
+                            target_store.conn.execute(
+                                "INSERT INTO trace_catalog (trace_hash, trace_text) VALUES (?, ?)",
+                                (trace_hash, trace_text),
+                            )
+                            target_id = int(target_store.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+                        src_to_target_trace[int(src_id)] = target_id
+
+                # Merge trials, remapping trace_ids from src -> target using src_to_target_trace
+                src_trials = target_store.conn.execute(
+"SELECT config_id, seed, success, timesteps, error, grasp, actual_grasped, kinematic_axis_error, anchor_error, true_joint, metadata, trace_ids FROM srcdb.trials"
+            ).fetchall()
+
+                for row in src_trials:
+                    (config_id, seed, success, timesteps, error, grasp, actual_grasped, kinematic_axis_error, anchor_error, true_joint, metadata, trace_ids_json) = row
+
+                    # remap trace ids if present
+                    trace_ids_target_json = None
+                    if trace_ids_json:
+                        try:
+                            src_trace_ids = json.loads(trace_ids_json)
+                        except Exception:
+                            src_trace_ids = []
+                        mapped = []
+                        for sid in src_trace_ids:
+                            mapped_id = src_to_target_trace.get(int(sid))
+                            if mapped_id is None:
+                                # As a fallback, try to resolve by hash from srcdb.trace_catalog
+                                cur = target_store.conn.execute(
+                                    "SELECT trace_hash FROM srcdb.trace_catalog WHERE trace_id = ?",
+                                    (int(sid),),
+                                ).fetchone()
+                                if cur is not None:
+                                    th = cur[0]
+                                    existing = target_store.conn.execute(
+                                        "SELECT trace_id FROM trace_catalog WHERE trace_hash = ?",
+                                        (th,),
+                                    ).fetchone()
+                                    if existing is not None:
+                                        mapped_id = int(existing[0])
+                                    else:
+                                        # copy the trace_text over
+                                        trace_text_row = target_store.conn.execute(
+                                            "SELECT trace_text FROM srcdb.trace_catalog WHERE trace_id = ?",
+                                            (int(sid),),
+                                        ).fetchone()
+                                        trace_text = trace_text_row[0] if trace_text_row is not None else ""
+                                        target_store.conn.execute(
+                                            "INSERT INTO trace_catalog (trace_hash, trace_text) VALUES (?, ?)",
+                                            (th, trace_text),
+                                        )
+                                        mapped_id = int(target_store.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+                            if mapped_id is not None:
+                                mapped.append(mapped_id)
+                        trace_ids_target_json = None if not mapped else json.dumps(mapped)
+
+                    # insert trial with trace_ids included
+                    target_store.conn.execute(
+                        "INSERT INTO trials (config_id, seed, success, timesteps, error, grasp, actual_grasped, kinematic_axis_error, anchor_error, true_joint, metadata, trace_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            config_id,
+                            seed,
+                            success,
+                            timesteps,
+                            error,
+                            grasp,
+                            actual_grasped,
+                            kinematic_axis_error,
+                            anchor_error,
+                            true_joint,
+                            metadata,
+                            trace_ids_target_json,
+                        ),
                     )
-                    SELECT
-                        config_id,
-                        seed,
-                        success,
-                        timesteps,
-                        error,
-                        grasp,
-                        kinematic_axis_error,
-                        anchor_error,
-                        true_joint,
-                        metadata
-                    FROM srcdb.trials
-                    """
-                )
+
                 target_store.conn.commit()
             finally:
                 try:
@@ -493,6 +559,7 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None, prior_no
                 "sweep_value": job["sweep_value"],
                 "random_init_time": RANDOM_INIT_TIME,
                 "random_std": 1,
+                "return_gradient_traces": True,
             }
             # Only pass these if they were actually specified
             if disturbance is not None:
@@ -506,10 +573,17 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None, prior_no
 
             if prior_noise_std_kinematic is not None:
                 trial_kwargs["prior_noise_std_kinematic"] = prior_noise_std_kinematic
-            success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
+            success, timesteps, err, true_joint, grasp, actual_grasped, kinematic_axis_error, anchor_error, gradient_traces = run_trial(
                 env,
                 **trial_kwargs
-            )   
+            )
+
+            # Register traces into the catalog and collect compact trace_ids
+            trace_ids = []
+            for trace in gradient_traces:
+                if trace is None:
+                    continue
+                trace_ids.append(store.register_trace(trace))
 
             store.add_trial(
                 params=job["trial_params"],
@@ -519,8 +593,10 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None, prior_no
                 error=err,
                 true_joint=true_joint,
                 grasp=grasp,
+                actual_grasped=actual_grasped,
                 kinematic_axis_error=kinematic_axis_error,
                 anchor_error=anchor_error,
+                trace_ids=trace_ids,
                 metadata=job_metadata,
             )
 
@@ -534,61 +610,12 @@ def main(job_index:int, disturbance:float=None, noise_scale:float=None, prior_no
                 err,
                 true_joint,
                 grasp,
+                actual_grasped,
                 kinematic_axis_error,
                 anchor_error
             ))
 
             print(f"run {run}: success={success}, steps={timesteps}, err={err}")
-
-        # initial_successes = sum(1 for result in results if result[4])
-        # if initial_successes in {1, 2}:
-        #     print(
-        #         f"Boundary success rate detected ({initial_successes}/{NUM_TRIALS_PER_JOB}), "
-        #         f"running {BOUNDARY_EXTENDED_TRIALS} more trials to total {NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS} runs."
-        #     )
-        #     for run in range(NUM_TRIALS_PER_JOB, NUM_TRIALS_PER_JOB + BOUNDARY_EXTENDED_TRIALS):
-        #         set_global_seed(run)
-        #         success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
-        #             env,
-        #             estimator_params=job["trial_params"],
-        #             max_timesteps=MAX_TIMESTEPS,
-        #             sweep_label=job["sweep_label"],
-        #             group_name=job["group_name"],
-        #             param_name=job["param_name"],
-        #             sweep_value=job["sweep_value"],
-        #             random_init_time=RANDOM_INIT_TIME,
-        #             random_std=1,
-        #             disturbance=disturbance,
-        #             noise_scale=noise_scale
-        #         )
-
-        #         store.add_trial(
-        #             params=job["trial_params"],
-        #             success=success,
-        #             seed=run,
-        #             timesteps=timesteps,
-        #             error=err,
-        #             true_joint=true_joint,
-        #             grasp=grasp,
-        #             kinematic_axis_error=kinematic_axis_error,
-        #             anchor_error=anchor_error,
-        #             metadata=job_metadata,
-        #         )
-
-        #         results.append((
-        #             job["group_name"],
-        #             job["param_name"],
-        #             job["sweep_label"],
-        #             job["sweep_value"],
-        #             success,
-        #             timesteps,
-        #             err,
-        #             true_joint,
-        #             grasp,
-        #             kinematic_axis_error,
-        #             anchor_error
-        #         ))
-        #         print(f"run {run}: success={success}, steps={timesteps}, err={err}")
     finally:
         try:
             env.close()

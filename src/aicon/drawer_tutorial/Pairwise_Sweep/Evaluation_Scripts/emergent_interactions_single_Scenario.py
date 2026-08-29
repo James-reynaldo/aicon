@@ -247,7 +247,7 @@ def parse_pair(metadata):
     return None
 
 
-def read_pairwise_job_series(db_path, metrics="success", include_failed_timesteps=False):
+def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=False):
     conn = sqlite3.connect(db_path)
     try:
         if metrics == "success":
@@ -261,7 +261,7 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_timestep
         elif metrics == "anchor_error":
             rows = conn.execute(
                 """
-                SELECT t.anchor_error, t.metadata
+                SELECT t.anchor_error, t.success, t.metadata
                 FROM trials t
                 WHERE t.metadata IS NOT NULL
                 """
@@ -282,14 +282,14 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_timestep
     by_job = defaultdict(list)
 
     for row in rows:
-        if metrics == "timesteps":
+        if metrics != "success":
             # rows are (timesteps, success, metadata)
             try:
                 metric_value, success_flag, metadata_json = row
             except Exception:
                 continue
             # Optionally skip failed trials
-            if not include_failed_timesteps and not success_flag:
+            if not include_failed_trials and not success_flag:
                 continue
         else:
             try:
@@ -348,7 +348,7 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_timestep
     return parameters, pair_vectors
 
 
-def read_single_sweep_series(db_path, metrics="success", include_failed_timesteps=False):
+def read_single_sweep_series(db_path, metrics="success", include_failed_trials=False):
     """
     Read 1d sweep trials and compute Si values.
     Returns both Si values and organized success data by parameter and label.
@@ -366,7 +366,7 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_timestep
         elif metrics == "anchor_error":
             rows = conn.execute(
                 """
-                SELECT t.anchor_error, t.metadata
+                SELECT t.anchor_error,t.success, t.metadata
                 FROM trials t
                 WHERE t.metadata IS NOT NULL
                 """
@@ -390,12 +390,12 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_timestep
     standard_baseline_successes = []
 
     for row in rows:
-        if metrics == "timesteps":
+        if metrics != "success":
             try:
                 metric_value, success_flag, metadata_json = row
             except Exception:
                 continue
-            if not include_failed_timesteps and not success_flag:
+            if not include_failed_trials and not success_flag:
                 continue
         else:
             try:
@@ -744,6 +744,7 @@ def plot_si_vs_residuals(
     metrics="success",
     x_threshold=None,
     y_threshold=None,
+    y_max_threshold=None,
     residual_series=None,
 ):
     """Plot Si values against residuals per parameter on a shared scatter plot.
@@ -818,9 +819,9 @@ def plot_si_vs_residuals(
         y_hi = 3.0
     elif metrics == "anchor_error":
         x_lo = 0
-        x_hi = 0.2
+        x_hi = 0.15
         y_lo = 0
-        y_hi = 0.5
+        y_hi = 0.3
     else:
         pass
 
@@ -862,16 +863,31 @@ def plot_si_vs_residuals(
             if not group_points:
                 continue
             highlighted_parameters.update(point[0] for point in group_points)
-            ax.scatter(
-                [point[1] for point in group_points],
-                [point[2] for point in group_points],
-                alpha=0.95,
-                s=120,
-                color=colour_map[group_name],
-                edgecolors="black",
-                linewidth=0.8,
-                zorder=3,
-            )
+            # Draw each highlighted point individually so Max residual points
+            # keep their square marker and orange colour instead of being
+            # overridden by the group colour/marker.
+            for param, si_val, y_val in group_points:
+                # compute per-param max across all residual series
+                max_v = max((m.get(param, np.nan) for _, m in residual_series), default=np.nan)
+                is_max = not np.isnan(max_v) and np.isfinite(max_v) and np.isclose(y_val, float(max_v))
+                if is_max:
+                    draw_color = "#ff7f0e"
+                    draw_marker = "s"
+                else:
+                    draw_color = colour_map[group_name]
+                    draw_marker = "o"
+
+                ax.scatter(
+                    [si_val],
+                    [y_val],
+                    alpha=0.95,
+                    s=120,
+                    color=draw_color,
+                    edgecolors="black",
+                    linewidth=0.8,
+                    marker=draw_marker,
+                    zorder=3,
+                )
 
     plot_colours = {
         "Mean residual": "#1f77b4",
@@ -932,26 +948,86 @@ def plot_si_vs_residuals(
                 ax.add_artist(ax.legend_)
             ax.legend(handles=cluster_legend, loc="upper right", fontsize=8, title="Clusters")
 
-    annotated_params = set()
-    for series_name, residuals_by_parameter in residual_series:
+    # Use Mean residual mapping for annotation positions and threshold checks.
+    mean_residuals = None
+    max_residuals = None
+    for name, mapping in residual_series:
+        if name == "Mean residual":
+            mean_residuals = mapping
+        if name == "Max residual":
+            max_residuals = mapping
+    # If no explicit "Max residual" series, compute per-param max across series.
+    if max_residuals is None:
+        # Compute per-parameter maximum across all residual series robustly.
+        max_residuals = {}
         for param in parameters:
-            if param in annotated_params:
-                continue
-            si = si_values.get(param, np.nan)
-            residual = residuals_by_parameter.get(param, np.nan)
-            if np.isnan(si) or np.isnan(residual):
-                continue
-            if highlighted_parameters and param not in highlighted_parameters:
-                continue
-            ax.annotate(
-                short_label(param),
-                (si, residual),
-                fontsize=7,
-                alpha=0.8,
-                xytext=(5, 5),
-                textcoords="offset points",
-            )
-            annotated_params.add(param)
+            vals = [mapping.get(param, np.nan) for _, mapping in residual_series]
+            if vals:
+                max_v = np.nanmax(vals)
+                max_residuals[param] = float(max_v) if not np.isnan(max_v) else np.nan
+            else:
+                max_residuals[param] = np.nan
+
+    # Annotate parameters exceeding x OR y thresholds for Mean residual labels.
+    annotate_mean_params = set()
+    if x_threshold is not None or y_threshold is not None:
+        for param in parameters:
+            x_val = si_values.get(param, np.nan)
+            y_val_mean = mean_residuals.get(param, np.nan) if mean_residuals is not None else np.nan
+            above = False
+            if x_threshold is not None and not np.isnan(x_val) and x_val > x_threshold:
+                above = True
+            if y_threshold is not None and not np.isnan(y_val_mean) and y_val_mean > y_threshold:
+                above = True
+            if above:
+                annotate_mean_params.add(param)
+
+    # Annotate parameters exceeding x OR y_max thresholds for Max residual labels.
+    annotate_max_params = set()
+    if x_threshold is not None or y_max_threshold is not None:
+        for param in parameters:
+            x_val = si_values.get(param, np.nan)
+            y_val_max = max_residuals.get(param, np.nan) if max_residuals is not None else np.nan
+            above_max = False
+            if x_threshold is not None and not np.isnan(x_val) and x_val > x_threshold:
+                above_max = True
+            if y_max_threshold is not None and not np.isnan(y_val_max) and y_val_max > y_max_threshold:
+                above_max = True
+            if above_max:
+                annotate_max_params.add(param)
+
+    # Do not annotate highlighted groups here; annotations are strictly
+    # controlled by x/y thresholds per user request.
+
+    # Annotate Mean residual points
+    for param in sorted(annotate_mean_params):
+        si = si_values.get(param, np.nan)
+        mean_r = mean_residuals.get(param, np.nan) if mean_residuals is not None else np.nan
+        if np.isnan(si) or np.isnan(mean_r):
+            continue
+        ax.annotate(
+            short_label(param),
+            (si, mean_r),
+            fontsize=7,
+            alpha=0.9,
+            xytext=(5, 5),
+            textcoords="offset points",
+        )
+
+    # Annotate Max residual points (separate threshold control)
+    for param in sorted(annotate_max_params):
+        si = si_values.get(param, np.nan)
+        max_r = max_residuals.get(param, np.nan) if max_residuals is not None else np.nan
+        if np.isnan(si) or np.isnan(max_r):
+            continue
+        ax.annotate(
+            short_label(param),
+            (si, max_r),
+            fontsize=7,
+            alpha=0.9,
+            xytext=(5, -8),
+            textcoords="offset points",
+        )
 
     ax.set_xlabel("S_i (Self-Interaction std_dev)")
     ax.set_ylabel("Residual per Parameter")
@@ -1590,13 +1666,19 @@ def main():
         help="Y-axis (residual) threshold for auto-highlighting. If both x and y thresholds are provided, parameters above both are highlighted.",
     )
     parser.add_argument(
-        "--metric",
-        choices=["success", "anchor_error", "timesteps"],
-        default="success",
-        help="Metric to analyze: success (default), anchor_error, or timesteps.",
+        "--y-max-threshold",
+        type=float,
+        default=None,
+        help="Y-axis threshold for Max residual labeling. Controls which Max residual points get labeled (separate from mean residual threshold).",
     )
     parser.add_argument(
-        "--include-failed-timesteps",
+        "--metric",
+        choices=["success", "anchor_error", "timesteps", "grasp"],
+        default="success",
+        help="Metric to analyze: success (default), anchor_error, timesteps, or grasp.",
+    )
+    parser.add_argument(
+        "--include-failed-trials",
         action="store_true",
         help="When analyzing timesteps, include failed trials (otherwise only successful trials are considered).",
     )
@@ -1629,13 +1711,13 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     parameters, pairwise_series = read_pairwise_job_series(
-        db_path, metrics=args.metric, include_failed_timesteps=args.include_failed_timesteps
+        db_path, metrics=args.metric, include_failed_trials=args.include_failed_trials
     )
 
 
     # Read single sweep data for Si values and 1D parameter data
     si_values, one_d_successes_by_parameter, standard_baseline = read_single_sweep_series(
-        db_path, metrics=args.metric, include_failed_timesteps=args.include_failed_timesteps
+        db_path, metrics=args.metric, include_failed_trials=args.include_failed_trials
     )
     # Print single-sweep standard deviations (S_i) for key parameters for debugging
     target_params = [
@@ -1880,6 +1962,7 @@ def main():
         metrics=args.metric,
         x_threshold=args.x_threshold,
         y_threshold=args.y_threshold,
+        y_max_threshold=args.y_max_threshold,
         residual_series=[
             ("Mean residual", mean_ssab_s),
             ("Max residual", max_ssab_s),

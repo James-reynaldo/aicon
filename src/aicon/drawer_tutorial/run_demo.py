@@ -1,3 +1,6 @@
+import ast
+import hashlib
+import json
 import time
 import copy
 from collections import deque
@@ -36,6 +39,37 @@ def render_frame(env, timestamp):
     """Render one frame when visualization is enabled for the drawer demo."""
     if RENDER:
         env.render()
+
+
+def canonicalize_gradient_trace(trace):
+    """Return a deterministic, canonical JSON string for the current gradient trace."""
+    if trace is None:
+        return None
+    if isinstance(trace, torch.Tensor):
+        payload = trace.detach().cpu().tolist()
+    elif isinstance(trace, np.ndarray):
+        payload = trace.tolist()
+    elif isinstance(trace, (list, tuple)):
+        payload = list(trace)
+    elif isinstance(trace, str):
+        payload = trace
+    else:
+        payload = str(trace)
+
+    try:
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except TypeError:
+        return json.dumps(str(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def trace_hash(trace):
+    """Return a deterministic SHA-256 hash for a canonical trace."""
+    canonical = canonicalize_gradient_trace(trace)
+    if canonical is None:
+        return None
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 # Disturbance configuration for periodic jerks
 DISTURBANCE_INTERVAL = 1.0
 DISTURBANCE_MAGNITUDE = 0.0
@@ -625,7 +659,7 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
               reset_on_start=True, random_init_time=0.0, random_std=0.1,
               random_disturbance=None, periodic_disturbance_interval=None,
               periodic_disturbance_magnitude=0.0, noise_scale=1.0, prior_noise_std =0.01,prior_noise_std_kinematic=0.0,
-              render=None, status_label=None):
+              render=None, status_label=None, return_gradient_traces=False):
     """Shared drawer-control loop for the interactive demo and parameter sweeps."""
     image_dir = Path(__file__).resolve().parent / "demo"
     if SAVE_PNG:
@@ -659,9 +693,14 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
     done_wait_steps = 0
     base_env = env.env if hasattr(env, "env") else env
     initial_drawer_handle_pos = np.asarray(base_env.get_drawer_handle_pos(), dtype=np.float64).reshape(-1)
+    job_gradient_traces = []
     print("initial_drawer_handle_pos:", initial_drawer_handle_pos)
     while True:
         run_component_sequence(components, torch.tensor(curr_t))
+        current_trace = getattr(velocities, "gradient_trace", None)
+        canonical_trace = canonicalize_gradient_trace(current_trace)
+        if canonical_trace is not None:
+            job_gradient_traces.append(canonical_trace)
         velocity = velocities.quantities["action_velo_ee"].cpu().numpy()
         gripper_action = gripper.quantities["gripper_activation"].squeeze().cpu().numpy()
         action = np.concatenate([velocity, np.zeros(3), [2 * gripper_action - 1]])
@@ -718,11 +757,14 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
             limit = max_timesteps if max_timesteps is not None else "inf"
             print(f"  [{status_label}] step {step_idx:04d}/{limit}: true_joint={true_joint:.6f} estimated_joint={estimated_joint:.6f}"
                   f"kinematic_axis_error={kinematic_axis_error:.6f}, err={joint_error:+.6f}, "
-                  f"anchor_error={anchor_error:.6f}, grasped={grasp_bool and actual_grasped}", flush=True)
-        if stop_on_done and (done or reward == 1.0 or done_wait_steps > 0):
+                  f"anchor_error={anchor_error:.6f}, grasped={grasp_bool and actual_grasped}, gripper_activation={gripper_action}", flush=True)
+        if stop_on_done and ((done or reward == 1.0 or done_wait_steps > 0)):
             done_wait_steps = min(done_wait_steps + 1, 50)
             if done_wait_steps >= 50:
-                return True, step_idx, joint_error,true_joint, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
+                result = (True, step_idx, joint_error, true_joint, grasp_bool, actual_grasped, kinematic_axis_error, anchor_error)
+                if return_gradient_traces:
+                    return result + (job_gradient_traces,)
+                return result
         else:
             done_wait_steps = 0
         curr_t += env.control_timestep
@@ -733,7 +775,10 @@ def run_trial(env,device, estimator_params=None, max_timesteps=None, *, stop_on_
             render_frame(env, curr_t)
         step_idx += 1
         if max_timesteps is not None and step_idx > max_timesteps:
-            return False, max_timesteps, joint_error,true_joint, grasp_bool and actual_grasped, kinematic_axis_error, anchor_error
+            result = (False, max_timesteps, joint_error, true_joint, grasp_bool, actual_grasped, kinematic_axis_error, anchor_error)
+            if return_gradient_traces:
+                return result + (job_gradient_traces,)
+            return result
 
         # Get current joint positions
         if MANUAL_CONTROL:

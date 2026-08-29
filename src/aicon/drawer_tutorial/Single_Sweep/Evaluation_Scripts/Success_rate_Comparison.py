@@ -144,7 +144,7 @@ def read_results_from_db(db_path: Path):
     return rows
 
 
-def build_summary(rows, sweep_label="negative", metric="success_rate", include_failed_timesteps: bool = False, debug_param_group: str = None):
+def build_summary(rows, sweep_label="negative", metric="success_rate", include_failed_trials: bool = False, debug_param_group: str = None):
     # Filter rows based on sweep_label
     filtered_rows = filter_rows_by_sweep_label(rows, sweep_label)
     # Compute a global "standard" baseline (if present) to use as fallback
@@ -155,28 +155,28 @@ def build_summary(rows, sweep_label="negative", metric="success_rate", include_f
             if metric == "success_rate":
                 standard_vals.append(1.0 if r.get("success") else 0.0)
             elif metric == "avg_timesteps":
-                if include_failed_timesteps or r.get("success"):
+                if include_failed_trials or r.get("success"):
                     if r.get("timesteps") is not None:
                         try:
                             standard_vals.append(float(r.get("timesteps")))
                         except Exception:
                             pass
             elif metric == "avg_anchor_error":
-                if include_failed_timesteps or r.get("success"):
+                if include_failed_trials or r.get("success"):
                     if r.get("anchor_error") is not None:
                         try:
                             standard_vals.append(float(r.get("anchor_error")))
                         except Exception:
                             pass
             elif metric == "avg_kinematic_axis_error":
-                if include_failed_timesteps or r.get("success"):
+                if include_failed_trials or r.get("success"):
                     if r.get("kinematic_axis_error") is not None:
                         try:
                             standard_vals.append(float(r.get("kinematic_axis_error")))
                         except Exception:
                             pass
             elif metric == "avg_error":
-                if include_failed_timesteps or r.get("success"):
+                if include_failed_trials or r.get("success"):
                     if r.get("error") is not None:
                         try:
                             standard_vals.append(float(r.get("error")))
@@ -214,7 +214,7 @@ def build_summary(rows, sweep_label="negative", metric="success_rate", include_f
                     rates.append(rate)
                     included_labels.append(sweep_val)
                 elif metric == "avg_anchor_error":
-                    if include_failed_timesteps:
+                    if include_failed_trials:
                         anchor_errors = [r.get("anchor_error") for r in rows_list if r.get("anchor_error") is not None]
                     else:
                         anchor_errors = [r.get("anchor_error") for r in rows_list if r.get("success") and r.get("anchor_error") is not None]
@@ -222,7 +222,7 @@ def build_summary(rows, sweep_label="negative", metric="success_rate", include_f
                         rates.append(float(np.mean(anchor_errors)))
                         included_labels.append(sweep_val)
                 elif metric == "avg_timesteps":
-                    if include_failed_timesteps:
+                    if include_failed_trials:
                         success_timesteps = [r.get("timesteps") for r in rows_list if r.get("timesteps") is not None]
                     else:
                         success_timesteps = [r.get("timesteps") for r in rows_list if r.get("success") and r.get("timesteps") is not None]
@@ -230,7 +230,7 @@ def build_summary(rows, sweep_label="negative", metric="success_rate", include_f
                         rates.append(float(np.mean(success_timesteps)))
                         included_labels.append(sweep_val)
                 elif metric == "avg_kinematic_axis_error":
-                    if include_failed_timesteps:
+                    if include_failed_trials:
                         kinematic_errors = [r.get("kinematic_axis_error") for r in rows_list if r.get("kinematic_axis_error") is not None]
                     else:
                         kinematic_errors = [r.get("kinematic_axis_error") for r in rows_list if r.get("success") and r.get("kinematic_axis_error") is not None]
@@ -238,7 +238,7 @@ def build_summary(rows, sweep_label="negative", metric="success_rate", include_f
                         rates.append(float(np.mean(kinematic_errors)))
                         included_labels.append(sweep_val)
                 elif metric == "avg_error":
-                    if include_failed_timesteps:
+                    if include_failed_trials:
                         errors = [r.get("error") for r in rows_list if r.get("error") is not None]
                     else:
                         errors = [r.get("error") for r in rows_list if r.get("success") and r.get("error") is not None]
@@ -1099,7 +1099,7 @@ def main():
         help="Print the top-10 1D sweep standard deviations for bad_prior timesteps and exit.",
     )
     parser.add_argument(
-        "--include-failed-timesteps",
+        "--include-failed-trials",
         action="store_true",
         help="Include failed trials when computing per-label means (affects avg_* metrics and S_i).",
     )
@@ -1140,13 +1140,13 @@ def main():
             db_path = Path(__file__).resolve().parents[1] / "data" / "bad_prior" / "experiment_store.db"
 
         si_values, one_d_successes_by_parameter, standard_baseline = eis.read_single_sweep_series(
-            db_path, metrics="timesteps", include_failed_timesteps=args.include_failed_timesteps
+            db_path, metrics="timesteps", include_failed_trials=args.include_failed_trials
         )
         targets = [
             "drawer_position.initial_uncertainty_depth",
             "drawer_position.initial_uncertainty_scale",
         ]
-        print(f"Single-sweep standard deviations (S_i) for bad_prior (timesteps, include_failed_timesteps={args.include_failed_timesteps}):")
+        print(f"Single-sweep standard deviations (S_i) for bad_prior (timesteps, include_failed_trials={args.include_failed_trials}):")
         for t in targets:
             print(f" - {t}: S_i = {si_values.get(t, float('nan'))}, 1D means = {one_d_successes_by_parameter.get(t)})")
         return
@@ -1216,10 +1216,10 @@ def main():
     #     for csv_path in csv_files:
     #         all_rows.extend(read_results(csv_path))
 
-    summary_normal = build_summary(all_rows_normal, sweep_label=args.sweep_label, metric=args.metric, include_failed_timesteps=args.include_failed_timesteps)
-    summary_noise = build_summary(all_rows_noise, sweep_label=args.sweep_label, metric=args.metric, include_failed_timesteps=args.include_failed_timesteps)
-    summary_disturbance = build_summary(all_rows_disturbance, sweep_label=args.sweep_label, metric=args.metric, include_failed_timesteps=args.include_failed_timesteps)
-    summary_bad_prior = build_summary(all_rows_bad_prior, sweep_label=args.sweep_label, metric=args.metric, include_failed_timesteps=args.include_failed_timesteps, debug_param_group="bad_prior")
+    summary_normal = build_summary(all_rows_normal, sweep_label=args.sweep_label, metric=args.metric, include_failed_trials=args.include_failed_trials)
+    summary_noise = build_summary(all_rows_noise, sweep_label=args.sweep_label, metric=args.metric, include_failed_trials=args.include_failed_trials)
+    summary_disturbance = build_summary(all_rows_disturbance, sweep_label=args.sweep_label, metric=args.metric, include_failed_trials=args.include_failed_trials)
+    summary_bad_prior = build_summary(all_rows_bad_prior, sweep_label=args.sweep_label, metric=args.metric, include_failed_trials=args.include_failed_trials, debug_param_group="bad_prior")
     if not summary_normal:
         raise SystemExit("No valid rows found to plot.")
 
@@ -1230,27 +1230,27 @@ def main():
     if args.sweep_label == "all":
         stable_normal = find_stable_all_points(
             summary_normal,
-            build_summary(all_rows_normal, sweep_label="negative", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
-            build_summary(all_rows_normal, sweep_label="zero", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
-            build_summary(all_rows_normal, sweep_label="positive", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
+            build_summary(all_rows_normal, sweep_label="negative", metric=args.metric, include_failed_trials=args.include_failed_trials),
+            build_summary(all_rows_normal, sweep_label="zero", metric=args.metric, include_failed_trials=args.include_failed_trials),
+            build_summary(all_rows_normal, sweep_label="positive", metric=args.metric, include_failed_trials=args.include_failed_trials),
         )
         stable_noise = find_stable_all_points(
             summary_noise,
-            build_summary(all_rows_noise, sweep_label="negative", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
-            build_summary(all_rows_noise, sweep_label="zero", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
-            build_summary(all_rows_noise, sweep_label="positive", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
+            build_summary(all_rows_noise, sweep_label="negative", metric=args.metric, include_failed_trials=args.include_failed_trials),
+            build_summary(all_rows_noise, sweep_label="zero", metric=args.metric, include_failed_trials=args.include_failed_trials),
+            build_summary(all_rows_noise, sweep_label="positive", metric=args.metric, include_failed_trials=args.include_failed_trials),
         )
         stable_disturbance = find_stable_all_points(
             summary_disturbance,
-            build_summary(all_rows_disturbance, sweep_label="negative", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
-            build_summary(all_rows_disturbance, sweep_label="zero", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
-            build_summary(all_rows_disturbance, sweep_label="positive", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
+            build_summary(all_rows_disturbance, sweep_label="negative", metric=args.metric, include_failed_trials=args.include_failed_trials),
+            build_summary(all_rows_disturbance, sweep_label="zero", metric=args.metric, include_failed_trials=args.include_failed_trials),
+            build_summary(all_rows_disturbance, sweep_label="positive", metric=args.metric, include_failed_trials=args.include_failed_trials),
         )
         stable_bad_prior = find_stable_all_points(
             summary_bad_prior,
-            build_summary(all_rows_bad_prior, sweep_label="negative", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
-            build_summary(all_rows_bad_prior, sweep_label="zero", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
-            build_summary(all_rows_bad_prior, sweep_label="positive", metric=args.metric, include_failed_timesteps=args.include_failed_timesteps),
+            build_summary(all_rows_bad_prior, sweep_label="negative", metric=args.metric, include_failed_trials=args.include_failed_trials),
+            build_summary(all_rows_bad_prior, sweep_label="zero", metric=args.metric, include_failed_trials=args.include_failed_trials),
+            build_summary(all_rows_bad_prior, sweep_label="positive", metric=args.metric, include_failed_trials=args.include_failed_trials),
         )
 
     # output folder includes metric name

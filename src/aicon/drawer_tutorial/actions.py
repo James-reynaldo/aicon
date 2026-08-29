@@ -79,6 +79,11 @@ class VeloEEAction(ActionComponent):
                 self.gradient_trace_timestamps = deque()
             self.gradient_trace_history.append(trace_value)
             self.gradient_trace_timestamps.append(float(self.timestamp))
+        
+        # Keep the current gradient trace for cheap per-step inspection.
+        # Deduplication is done later in the job/trial loop to avoid slowing down every timestep.
+        if not hasattr(self, "unique_gradient_traces"):
+            self.unique_gradient_traces = set()
 
         t_part = self.perform_gradient_descent(last_action, steepest_grad)
 
@@ -138,6 +143,7 @@ class VeloEEAction(ActionComponent):
         self.gradient_trace_timestamps = deque()
         self.gradient_trace_description = ""
         self.gradient_trace = None
+        self.unique_gradient_traces = set()
         return True
 
     def initial_definitions(self):
@@ -149,6 +155,16 @@ class VeloEEAction(ActionComponent):
         self.gradient_trace_timestamps = deque()
         self.gradient_trace_description = ""
         self.gradient_trace = None
+        self.unique_gradient_traces = set()
+
+    def get_unique_gradient_traces(self):
+        """
+        Get all unique gradient traces accumulated during this trial.
+        
+        Returns:
+            set: Set of unique gradient traces (as tuples)
+        """
+        return getattr(self, "unique_gradient_traces", set())
 
 
 class GripperAction(ActionComponent):

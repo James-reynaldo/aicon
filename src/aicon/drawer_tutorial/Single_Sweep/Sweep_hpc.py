@@ -20,21 +20,21 @@ BOUNDARY_EXTENDED_TRIALS = 7
 RANDOM_INIT_TIME = 0  # seconds of random movement at start
 MAX_TIMESTEPS = 1000
 
-Visible_Initial_qpos_list = [
-np.array([-0.60657486,  0.55208371,  0.01406207, -1.88856343,  1.09944793,  1.29935419,  -0.16385514]), #visible
-np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]), #visible
-np.array([-0.60706375,  0.34607402,  0.09003703, -2.08550184,  1.2520165,   1.49328103,  -0.08097987]), #visible problem too close
-np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]), #visible
-np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]), # invisible
-]
+# Visible_Initial_qpos_list = [
+# np.array([-0.60657486,  0.55208371,  0.01406207, -1.88856343,  1.09944793,  1.29935419,  -0.16385514]), #visible
+# np.array([-0.60059587,  0.41057492,  0.01894018, -2.11816216,  1.080803,   1.35138319,  -0.24399737]), #visible
+# np.array([-0.60706375,  0.34607402,  0.09003703, -2.08550184,  1.2520165,   1.49328103,  -0.08097987]), #visible problem too close
+# np.array([-0.6024305,   0.56758879,  0.02335951, -1.86417613,  1.13117263,  1.33317896,  -0.14172676]), #visible
+# np.array([-0.62211521,  0.30425019,  -0.05303771, -2.14997687,  1.06525231,  1.27549496,  -0.19972245]), # invisible
+# ]
 
-Invisible_Initial_qpos_list = [
-np.array([-0.48750612,  1.17415488,  0.19242183, -1.14334887,  1.13314345,  1.47119768,  0.04283408]),
-np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]), # invisible
-np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]), # invisible at first
-np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]), # invisible
-np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]), #visible
-]
+# Invisible_Initial_qpos_list = [
+# np.array([-0.48750612,  1.17415488,  0.19242183, -1.14334887,  1.13314345,  1.47119768,  0.04283408]),
+# np.array([-0.55455954,  0.57271839,  0.12380571, -2.1670548,   1.14339199,  1.55548018,  -0.3880041 ]), # invisible
+# np.array([-0.61155419,  0.60486737,  -0.03850908, -1.99964344,  1.0136531,   1.33582555,  -0.3462424 ]), # invisible at first
+# np.array([-0.63386333,  0.32862117,  -0.09482711, -2.24104107,  0.99977055,  1.30391341,  -0.32659168]), # invisible
+# np.array([-0.58865829,  0.70879424,  0.0393395,  -1.81579848,  1.08319597,  1.37122098,  -0.23145539]), #visible
+# ]
 
 
 # reuse your existing functions (copy them from current file)
@@ -125,15 +125,9 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
                 if trial_index < 0 or trial_index >= NUM_TRIALS_PER_JOB:
                     raise ValueError(f"Invalid trial index {trial_index}")
                 run = trial_index
-                
-            # if run < len(Visible_Initial_qpos_list):
-            #     initial_panda_qpos = Visible_Initial_qpos_list[run]
-            # else:
-            #     initial_panda_qpos = Invisible_Initial_qpos_list[run - len(Visible_Initial_qpos_list)]
             initial_panda_qpos = initial_qpos_list[run]
             env = setup_env(initial_qpos=initial_panda_qpos)
             set_global_seed(run)  # set seed for reproducibility
-            # Arguments that are always passed
             trial_kwargs = {
                 "estimator_params": job["trial_params"],
                 "max_timesteps": MAX_TIMESTEPS,
@@ -143,8 +137,8 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
                 "sweep_value": job["sweep_value"],
                 "random_init_time": RANDOM_INIT_TIME,
                 "random_std": 1,
+                "return_gradient_traces": True,
             }
-            # Only pass these if they were actually specified
             if disturbance is not None:
                 trial_kwargs["disturbance"] = disturbance
 
@@ -157,11 +151,16 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
             if prior_noise_std_kinematic is not None:
                 trial_kwargs["prior_noise_std_kinematic"] = prior_noise_std_kinematic
 
-            # Run trial
-            success, timesteps, err, true_joint, grasp, kinematic_axis_error, anchor_error = run_trial(
+            success, timesteps, err, true_joint, grasp, actual_grasped, kinematic_axis_error, anchor_error, gradient_traces = run_trial(
                 env,
                 **trial_kwargs
             )
+
+            trace_ids = []
+            for trace in gradient_traces:
+                if trace is None:
+                    continue
+                trace_ids.append(store.register_trace(trace))
 
             store.add_trial(
                 params=job["trial_params"],
@@ -171,8 +170,10 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
                 error=err,
                 true_joint=true_joint,
                 grasp=grasp,
+                actual_grasped=actual_grasped,
                 kinematic_axis_error=kinematic_axis_error,
                 anchor_error=anchor_error,
+                trace_ids=trace_ids,
                 metadata=job_metadata,
             )
 
@@ -186,15 +187,15 @@ def main(job_index: int, disturbance: float = None, noise_scale: float = None, p
                 err,
                 true_joint,
                 grasp,
+                actual_grasped,
                 kinematic_axis_error,
                 anchor_error
             ))
 
             print(f"run {run}: success={success}, steps={timesteps}, err={err}")
-            #No need to continue if we are only running a single trial
             if trial_index is not None:
                 break
-            
+
     finally:
         try:
             env.close()
