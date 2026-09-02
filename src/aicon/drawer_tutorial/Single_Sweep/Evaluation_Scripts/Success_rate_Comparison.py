@@ -108,12 +108,68 @@ def read_results(csv_path: Path):
         return rows
 
 
+def _trace_text_has_uncertainty_component(trace_text):
+    """The stored trace catalog records component names in order, not numeric payloads.
+
+    Epistemicity should only count a timestep if the trace contains an uncertainty-related
+    component such as `uncertainty_dist` or `uncertainty_drawer`.
+    """
+    if trace_text is None:
+        return False
+    text = str(trace_text).strip()
+    if text in {"", "[]", "null", "None", "NaN", "nan"}:
+        return False
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = text
+
+    if isinstance(parsed, (list, tuple)):
+        for item in parsed:
+            token = str(item).lower()
+            if "uncertainty" in token:
+                return True
+        return False
+
+    if isinstance(parsed, str):
+        return "uncertainty" in parsed.lower()
+
+    return bool(parsed)
+
+
+def _compute_epistemicity_from_trace_ids(conn, trace_ids):
+    if not trace_ids:
+        return 0.0
+    try:
+        trace_ids = json.loads(trace_ids) if isinstance(trace_ids, str) else list(trace_ids)
+    except Exception:
+        return 0.0
+
+    if not trace_ids:
+        return 0.0
+
+    total_steps = len(trace_ids)
+    gradient_steps = 0
+    for trace_id in trace_ids:
+        try:
+            trace_id_int = int(trace_id)
+        except (TypeError, ValueError):
+            continue
+        row = conn.execute("SELECT trace_text FROM trace_catalog WHERE trace_id = ?", (trace_id_int,)).fetchone()
+        trace_text = row[0] if row is not None else None
+        if _trace_text_has_uncertainty_component(trace_text):
+            gradient_steps += 1
+    if total_steps == 0:
+        return 0.0
+    return float(gradient_steps) / float(total_steps)
+
+
 def read_results_from_db(db_path: Path):
     rows = []
     conn = sqlite3.connect(str(db_path))
     cur = conn.cursor()
-    cur.execute("SELECT t.metadata, t.success, t.timesteps, t.error, t.anchor_error, t.kinematic_axis_error FROM trials t")
-    for metadata_json, success_val, timesteps_val, error_val, anchor_err_val, kinematic_err_val in cur.fetchall():
+    cur.execute("SELECT t.metadata, t.success, t.timesteps, t.error, t.anchor_error, t.kinematic_axis_error, t.trace_ids FROM trials t")
+    for metadata_json, success_val, timesteps_val, error_val, anchor_err_val, kinematic_err_val, trace_ids_json in cur.fetchall():
         try:
             metadata = json.loads(metadata_json) if metadata_json else {}
         except Exception:
@@ -128,6 +184,7 @@ def read_results_from_db(db_path: Path):
         label = normalize_sweep_label(metadata.get("label", ""))
         success = parse_bool(success_val)
         experiment_type = metadata.get("experiment_type", "")
+        epistemicity = _compute_epistemicity_from_trace_ids(conn, trace_ids_json)
         rows.append({
             "param_group": group,
             "param_name": name,
@@ -137,6 +194,7 @@ def read_results_from_db(db_path: Path):
             "error": error_val,
             "anchor_error": anchor_err_val,
             "kinematic_axis_error": kinematic_err_val,
+            "epistemicity": epistemicity,
             "experiment_type": experiment_type,
         })
 
@@ -182,6 +240,13 @@ def build_summary(rows, sweep_label="negative", metric="success_rate", include_f
                             standard_vals.append(float(r.get("error")))
                         except Exception:
                             pass
+            elif metric == "epistemicity":
+                trial_epistemicity = r.get("epistemicity")
+                if trial_epistemicity is not None:
+                    try:
+                        standard_vals.append(float(trial_epistemicity))
+                    except Exception:
+                        pass
     if standard_vals:
         standard_baseline = float(np.mean(np.asarray(standard_vals, dtype=float)))
 
@@ -244,6 +309,14 @@ def build_summary(rows, sweep_label="negative", metric="success_rate", include_f
                         errors = [r.get("error") for r in rows_list if r.get("success") and r.get("error") is not None]
                     if errors:
                         rates.append(float(np.mean(errors)))
+                        included_labels.append(sweep_val)
+                elif metric == "epistemicity":
+                    if include_failed_trials:
+                        epistemic_values = [r.get("epistemicity") for r in rows_list if r.get("epistemicity") is not None]
+                    else:
+                        epistemic_values = [r.get("epistemicity") for r in rows_list if r.get("success") and r.get("epistemicity") is not None]
+                    if epistemic_values:
+                        rates.append(float(np.mean(epistemic_values)))
                         included_labels.append(sweep_val)
 
             # If the per-parameter data lacks a 'standard' label but a global standard baseline exists,
@@ -823,6 +896,7 @@ def plot_combined_summary(
         "avg_error": "Average Error",
         "avg_anchor_error": "Average Anchor Error",
         "avg_kinematic_axis_error": "Average Kinematic Axis Error",
+        "epistemicity": "Epistemicity (uncertainty-gradient timesteps / total timesteps)",
     }
     ylabel = title_map.get(metric, metric)
     plt.title(f"{ylabel} by All Parameters ({sweep_label.capitalize()} Sweep) - Combined")
@@ -971,7 +1045,7 @@ def plot_combined_summary(
             )
         )
     group_legend = [Patch(facecolor=colors_map[pg], label=pg) for pg in summary_normal.keys()]
-    dataset_legend_artist = ax.legend(handles=dataset_legend, loc="upper left")
+    dataset_legend_artist = ax.legend(handles=dataset_legend, loc="lower left")
     ax.add_artist(dataset_legend_artist)
     ax.legend(handles=group_legend, loc="upper right", title="Parameter Groups")
     
@@ -1079,7 +1153,7 @@ def main():
     )
     parser.add_argument(
         "--metric",
-        choices=["success_rate", "avg_timesteps", "avg_error", "avg_anchor_error", "avg_kinematic_axis_error"],
+        choices=["success_rate", "avg_timesteps", "avg_error", "avg_anchor_error", "avg_kinematic_axis_error", "epistemicity"],
         default="success_rate",
         help="Metric to compute and plot.",
     )
@@ -1105,7 +1179,7 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.compare_success_failure and args.metric != "avg_anchor_error" and args.metric != "avg_error" and args.metric != "avg_kinematic_axis_error":
+    if args.compare_success_failure and args.metric not in {"avg_anchor_error", "avg_error", "avg_kinematic_axis_error"}:
         raise SystemExit("--compare-success-failure is only supported with --metric avg_anchor_error, avg_error, or avg_kinematic_axis_error")
 
     all_rows_normal = []
@@ -1266,15 +1340,15 @@ def main():
     else:
         out_dir = Path.cwd() / f"{metric_suffix}_comparison_plots_negative"
 
-    plot_summary(
-        summary_normal,
-        summary_noise,
-        summary_disturbance,
-        summary_bad_prior,
-        out_dir,
-        sweep_label=args.sweep_label,
-        metric=args.metric,
-    )
+    # plot_summary(
+    #     summary_normal,
+    #     summary_noise,
+    #     summary_disturbance,
+    #     summary_bad_prior,
+    #     out_dir,
+    #     sweep_label=args.sweep_label,
+    #     metric=args.metric,
+    # )
     plot_combined_summary(
         summary_normal,
         summary_noise,

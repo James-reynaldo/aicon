@@ -293,35 +293,70 @@ def _filter_rows_by_trial_window(rows, trial_window="all"):
 
 def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=False, trial_window="all"):
     conn = sqlite3.connect(db_path)
-    try:
-        if metrics == "success":
-            rows = conn.execute(
-                """
-                SELECT t.config_id, t.seed, t.success, t.metadata
-                FROM trials t
-                WHERE t.metadata IS NOT NULL
-                """
-            ).fetchall()
-        elif metrics == "anchor_error":
-            rows = conn.execute(
-                """
-                SELECT t.config_id, t.seed, t.anchor_error, t.success, t.metadata
-                FROM trials t
-                WHERE t.metadata IS NOT NULL
-                """
-            ).fetchall()
-        elif metrics == "timesteps":
-            rows = conn.execute(
-                """
-                SELECT t.config_id, t.seed, t.timesteps, t.success, t.metadata
-                FROM trials t
-                WHERE t.metadata IS NOT NULL
-                """
-            ).fetchall()
-    finally:
+    rows = []
+    if metrics == "success":
+        rows = conn.execute(
+            """
+            SELECT t.config_id, t.seed, t.success, t.metadata
+            FROM trials t
+            WHERE t.metadata IS NOT NULL
+            """
+        ).fetchall()
+    elif metrics == "anchor_error":
+        rows = conn.execute(
+            """
+            SELECT t.config_id, t.seed, t.anchor_error, t.success, t.metadata
+            FROM trials t
+            WHERE t.metadata IS NOT NULL
+            """
+        ).fetchall()
+    elif metrics == "timesteps":
+        rows = conn.execute(
+            """
+            SELECT t.config_id, t.seed, t.timesteps, t.success, t.metadata
+            FROM trials t
+            WHERE t.metadata IS NOT NULL
+            """
+        ).fetchall()
+    elif metrics == "epistemicity":
+        rows = conn.execute(
+            """
+            SELECT t.config_id, t.seed, t.trace_ids, t.success, t.metadata
+            FROM trials t
+            WHERE t.metadata IS NOT NULL
+            """
+        ).fetchall()
+    else:
         conn.close()
+        raise ValueError(f"Unsupported metrics: {metrics}")
 
     rows = _filter_rows_by_trial_window(rows, trial_window=trial_window)
+
+    # If computing epistemicity, preload trace_catalog to reduce DB queries
+    trace_catalog_map = None
+    if metrics == "epistemicity":
+        try:
+            trace_catalog_map = {}
+            for trace_id, trace_text in conn.execute("SELECT trace_id, trace_text FROM trace_catalog").fetchall():
+                try:
+                    trace_catalog_map[int(trace_id)] = trace_text
+                except Exception:
+                    continue
+        except Exception:
+            trace_catalog_map = None
+
+    # If computing epistemicity, preload trace_catalog to reduce DB queries
+    trace_catalog_map = None
+    if metrics == "epistemicity":
+        try:
+            trace_catalog_map = {}
+            for trace_id, trace_text in conn.execute("SELECT trace_id, trace_text FROM trace_catalog").fetchall():
+                try:
+                    trace_catalog_map[int(trace_id)] = trace_text
+                except Exception:
+                    continue
+        except Exception:
+            trace_catalog_map = None
 
     # Group pairwise data by (pair, label_a, label_b) to preserve label information
     by_pair_labels = defaultdict(lambda: defaultdict(list))
@@ -336,7 +371,10 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=F
         else:
             # rows are (config_id, seed, metric, success, metadata)
             try:
-                _, _, metric_value, success_flag, metadata_json = row
+                if metrics == "epistemicity":
+                    _, _, trace_ids_json, success_flag, metadata_json = row
+                else:
+                    _, _, metric_value, success_flag, metadata_json = row
             except Exception:
                 continue
             # Optionally skip failed trials
@@ -356,7 +394,10 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=F
 
         pair = tuple(sorted(parameters))
         try:
-            metric_val = float(metric_value)
+            if metrics == "epistemicity":
+                metric_val = _compute_epistemicity_from_trace_ids(conn, trace_ids_json, trace_catalog_map=(trace_catalog_map if 'trace_catalog_map' in locals() else None))
+            else:
+                metric_val = float(metric_value)
         except (TypeError, ValueError):
             continue
         
@@ -391,7 +432,7 @@ def read_pairwise_job_series(db_path, metrics="success", include_failed_trials=F
 
     parameters = sorted({param for pair in pair_vectors for param in pair})
     parameters = [param for param in parameters if not is_ignored_parameter(param)]
-
+    conn.close()
     return parameters, pair_vectors
 
 
@@ -401,37 +442,57 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
     Returns both Si values and organized success data by parameter and label.
     """
     conn = sqlite3.connect(db_path)
-    try:
-        if metrics == "success":
-            rows = conn.execute(
-                """
-                SELECT t.config_id, t.seed, t.success, t.metadata
-                FROM trials t
-                WHERE t.metadata IS NOT NULL
-                """
-            ).fetchall()
-        elif metrics == "anchor_error":
-            rows = conn.execute(
-                """
-                SELECT t.config_id, t.seed, t.anchor_error, t.success, t.metadata
-                FROM trials t
-                WHERE t.metadata IS NOT NULL
-                """
-            ).fetchall()
-        elif metrics == "timesteps":
-            rows = conn.execute(
-                """
-                SELECT t.config_id, t.seed, t.timesteps, t.success, t.metadata
-                FROM trials t
-                WHERE t.metadata IS NOT NULL
-                """
-            ).fetchall()
-        else:
-            raise ValueError(f"Unsupported metrics: {metrics}")
-    finally:
+    rows = []
+    if metrics == "success":
+        rows = conn.execute(
+            """
+            SELECT t.config_id, t.seed, t.success, t.metadata
+            FROM trials t
+            WHERE t.metadata IS NOT NULL
+            """
+        ).fetchall()
+    elif metrics == "anchor_error":
+        rows = conn.execute(
+            """
+            SELECT t.config_id, t.seed, t.anchor_error, t.success, t.metadata
+            FROM trials t
+            WHERE t.metadata IS NOT NULL
+            """
+        ).fetchall()
+    elif metrics == "timesteps":
+        rows = conn.execute(
+            """
+            SELECT t.config_id, t.seed, t.timesteps, t.success, t.metadata
+            FROM trials t
+            WHERE t.metadata IS NOT NULL
+            """
+        ).fetchall()
+    elif metrics == "epistemicity":
+        rows = conn.execute(
+            """
+            SELECT t.config_id, t.seed, t.trace_ids, t.success, t.metadata
+            FROM trials t
+            WHERE t.metadata IS NOT NULL
+            """
+        ).fetchall()
+    else:
         conn.close()
+        raise ValueError(f"Unsupported metrics: {metrics}")
 
     rows = _filter_rows_by_trial_window(rows, trial_window=trial_window)
+
+    # If computing epistemicity, preload trace_catalog to reduce DB queries
+    trace_catalog_map = None
+    if metrics == "epistemicity":
+        try:
+            trace_catalog_map = {}
+            for trace_id, trace_text in conn.execute("SELECT trace_id, trace_text FROM trace_catalog").fetchall():
+                try:
+                    trace_catalog_map[int(trace_id)] = trace_text
+                except Exception:
+                    continue
+        except Exception:
+            trace_catalog_map = None
 
     # Group by parameter -> label -> list of successes
     by_param_label = defaultdict(lambda: defaultdict(list))
@@ -446,7 +507,10 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
                 continue
         else:
             try:
-                _, _, metric_value, success_flag, metadata_json = row
+                if metrics == "epistemicity":
+                    _, _, trace_ids_json, success_flag, metadata_json = row
+                else:
+                    _, _, metric_value, success_flag, metadata_json = row
             except Exception:
                 continue
             if not include_failed_trials and not success_flag:
@@ -475,7 +539,10 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
             continue
 
         try:
-            metric_val = float(metric_value)
+            if metrics == "epistemicity":
+                metric_val = _compute_epistemicity_from_trace_ids(conn, trace_ids_json, trace_catalog_map=(trace_catalog_map if 'trace_catalog_map' in locals() else None))
+            else:
+                metric_val = float(metric_value)
         except (TypeError, ValueError):
             # Skip rows with non-numeric metric values
             continue
@@ -505,13 +572,24 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
 
     # For each parameter, compute S_i from the mean success rates per label.
     si_values = {}
-    for parameter, label_means in one_d_successes_by_parameter.items():
-        rates = [float(value) for value in label_means.values() if not np.isnan(value)]
-        if len(rates) > 1:
-            si_values[parameter] = float(np.sqrt(np.var(np.asarray(rates, dtype=float))))
-        elif rates:
-            # If only one label mean is available, variance is 0
-            si_values[parameter] = 0.0
+    if metrics == "epistemicity":
+        # SI should be the standard deviation of trial-level epistemicity values
+        for parameter, label_map in by_param_label.items():
+            vals = []
+            for label_vals in label_map.values():
+                vals.extend([float(v) for v in label_vals if not np.isnan(v)])
+            if vals:
+                si_values[parameter] = float(np.std(np.asarray(vals, dtype=float)))
+            else:
+                si_values[parameter] = 0.0
+    else:
+        for parameter, label_means in one_d_successes_by_parameter.items():
+            rates = [float(value) for value in label_means.values() if not np.isnan(value)]
+            if len(rates) > 1:
+                si_values[parameter] = float(np.sqrt(np.var(np.asarray(rates, dtype=float))))
+            elif rates:
+                # If only one label mean is available, variance is 0
+                si_values[parameter] = 0.0
 
     si_values = filter_ignored_parameter_values(si_values)
     one_d_successes_by_parameter = {
@@ -519,8 +597,197 @@ def read_single_sweep_series(db_path, metrics="success", include_failed_trials=F
         for parameter, label_values in one_d_successes_by_parameter.items()
         if not is_ignored_parameter(parameter)
     }
+    conn.close()
 
     return si_values, one_d_successes_by_parameter, standard_baseline
+
+
+def _trace_text_has_uncertainty_component(trace_text):
+    if trace_text is None:
+        return False
+    text = str(trace_text).strip()
+    if text in {"", "[]", "null", "None", "NaN", "nan"}:
+        return False
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = text
+
+    if isinstance(parsed, (list, tuple)):
+        for item in parsed:
+            token = str(item).lower()
+            if "uncertainty" in token:
+                return True
+        return False
+
+    if isinstance(parsed, str):
+        return "uncertainty" in parsed.lower()
+
+    return bool(parsed)
+
+
+def _compute_epistemicity_from_trace_ids(conn, trace_ids, trace_catalog_map=None):
+    if not trace_ids:
+        return 0.0
+    try:
+        trace_ids = json.loads(trace_ids) if isinstance(trace_ids, str) else list(trace_ids)
+    except Exception:
+        return 0.0
+
+    if not trace_ids:
+        return 0.0
+
+    total_steps = len(trace_ids)
+    gradient_steps = 0
+
+    # If a preloaded trace_catalog_map is provided, use it to avoid a DB roundtrip per trace id
+    if trace_catalog_map is not None:
+        for trace_id in trace_ids:
+            try:
+                trace_id_int = int(trace_id)
+            except (TypeError, ValueError):
+                continue
+            trace_text = trace_catalog_map.get(trace_id_int)
+            if _trace_text_has_uncertainty_component(trace_text):
+                gradient_steps += 1
+    else:
+        for trace_id in trace_ids:
+            try:
+                trace_id_int = int(trace_id)
+            except (TypeError, ValueError):
+                continue
+            row = conn.execute("SELECT trace_text FROM trace_catalog WHERE trace_id = ?", (trace_id_int,)).fetchone()
+            trace_text = row[0] if row is not None else None
+            if _trace_text_has_uncertainty_component(trace_text):
+                gradient_steps += 1
+    if total_steps == 0:
+        return 0.0
+    return float(gradient_steps) / float(total_steps)
+
+
+def read_epistemicity_by_parameter(db_path, include_failed_trials=False):
+    """Read 1d sweep trials and compute per-parameter epistemicity as in single-sweep analysis.
+
+    Epistemicity per trial is fraction of trace_ids whose trace_text contains 'uncertainty'.
+    We compute per-label means then average across labels (including 'standard' baseline if present).
+    Returns: dict parameter -> epistemicity_mean
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT t.metadata, t.success, t.trace_ids FROM trials t WHERE t.metadata IS NOT NULL")
+        rows = cur.fetchall()
+    finally:
+        # keep connection open for trace lookup in helper, pass conn; will close at end
+        pass
+
+    grouped = defaultdict(lambda: defaultdict(list))  # parameter -> label -> list of epistemicity values
+    standard_vals = []
+
+    # Preload trace catalog into memory to avoid many DB roundtrips
+    trace_catalog_map = {}
+    try:
+        for trace_id, trace_text in conn.execute("SELECT trace_id, trace_text FROM trace_catalog").fetchall():
+            try:
+                trace_catalog_map[int(trace_id)] = trace_text
+            except Exception:
+                continue
+    except Exception:
+        # If loading fails, continue and let helper query DB per-id
+        trace_catalog_map = None
+
+    for metadata_json, success_val, trace_ids_json in rows:
+        try:
+            metadata = json.loads(metadata_json) if metadata_json else {}
+        except Exception:
+            continue
+
+        if metadata.get("experiment_type") != "1d_sweep":
+            continue
+
+        parameter = metadata.get("parameter")
+        if not parameter:
+            continue
+
+        label = normalize_one_d_label(metadata.get("label", ""))
+        success = bool(success_val)
+        if not include_failed_trials and not success:
+            continue
+
+        trial_epistemicity = _compute_epistemicity_from_trace_ids(conn, trace_ids_json, trace_catalog_map=trace_catalog_map)
+
+        if parameter == "standard.standard" and label == "standard":
+            standard_vals.append(trial_epistemicity)
+            continue
+
+        grouped[parameter][label].append(trial_epistemicity)
+
+    # close connection
+    conn.close()
+
+    # Aggregate: per-parameter, compute per-label means, then mean across labels (include standard if available)
+    epistemicity_by_param = {}
+    for parameter, label_map in grouped.items():
+        label_means = []
+        included_labels = []
+        for label, vals in label_map.items():
+            if not vals:
+                continue
+            label_means.append(float(np.mean(np.asarray(vals, dtype=float))))
+            included_labels.append(label)
+
+        # include global standard baseline if parameter missing standard
+        if "standard" not in included_labels and standard_vals:
+            label_means.append(float(np.mean(np.asarray(standard_vals, dtype=float))))
+
+        if label_means:
+            epistemicity_by_param[parameter] = float(np.mean(np.asarray(label_means, dtype=float)))
+        else:
+            epistemicity_by_param[parameter] = np.nan
+
+    return epistemicity_by_param
+
+
+def plot_si_vs_epistemicity(parameters, si_values, epistemicity_map, output_path):
+    plt = _get_matplotlib_pyplot()
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    x = []
+    y = []
+    labels = []
+    for p in parameters:
+        si = si_values.get(p, np.nan)
+        e = epistemicity_map.get(p, np.nan)
+        if np.isnan(si) or np.isnan(e):
+            continue
+        x.append(si)
+        y.append(e)
+        labels.append(p)
+
+    # color by group prefix
+    groups = [p.split('.', 1)[0] if '.' in p else p for p in labels]
+    unique_groups = list(dict.fromkeys(groups))
+    cmap = plt.get_cmap('tab10')
+    group_colour_map = {g: cmap(i % 10) for i, g in enumerate(unique_groups)}
+    colours = [group_colour_map[g] for g in groups]
+
+    ax.scatter(x, y, c=colours, edgecolors='black', linewidth=0.4, s=90, alpha=0.9)
+
+    # group legend upper-left
+    from matplotlib.lines import Line2D
+    group_handles = [Line2D([0], [0], marker='o', color='w', label=g, markerfacecolor=group_colour_map[g], markeredgecolor='black', markersize=8) for g in unique_groups]
+    if group_handles:
+        ax.legend(handles=group_handles, title='Group', loc='upper left', fontsize=8)
+
+    ax.set_xlabel('S_i (Self-Interaction std_dev)')
+    ax.set_ylabel('Epistemicity (fraction of uncertainty-gradient timesteps)')
+    ax.set_title('SI vs Epistemicity')
+    ax.grid(True, alpha=0.3)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
 
 def compute_hi(parameters, pair_vectors, one_d_successes_by_parameter=None, standard_baseline=None):
     """
@@ -922,6 +1189,7 @@ def plot_si_vs_residuals(
     y_threshold=None,
     y_max_threshold=None,
     residual_series=None,
+    ss_ab_table=None,
 ):
     """Plot Si values against residuals per parameter on a shared scatter plot.
     Optional parameter groups can be highlighted with circles.
@@ -987,7 +1255,7 @@ def plot_si_vs_residuals(
         x_lo = 0
         x_hi = 300
         y_lo = 0
-        y_hi = 800000
+        y_hi = 500000
     elif metrics == "success":
         x_lo = 0
         x_hi = 0.5
@@ -998,6 +1266,11 @@ def plot_si_vs_residuals(
         x_hi = 0.15
         y_lo = 0
         y_hi = 0.3
+    elif metrics == "epistemicity":
+        x_lo = 0
+        x_hi = 1.0
+        y_lo = 0
+        y_hi = 1.0
     else:
         pass
 
@@ -1065,39 +1338,61 @@ def plot_si_vs_residuals(
                     zorder=3,
                 )
 
-    plot_colours = {
-        "Mean residual": "#1f77b4",
-        "Max residual": "#ff7f0e",
+    # Color points by their parameter 'group' (prefix before the first dot)
+    groups = [p.split('.', 1)[0] if '.' in p else p for p in parameters]
+    unique_groups = list(dict.fromkeys(groups))
+    group_colour_map = {g: plt.get_cmap('tab10')(i % 10) for i, g in enumerate(unique_groups)}
+
+    # Marker/alpha/size per series name (shape -> series type)
+    # Swapped so that Max residual is less transparent (higher alpha) and drawn on top.
+    series_markers = {
+        "Mean residual": {'marker': 'o', 'alpha': 0.5, 's': 80, 'z': 2},
+        "Max residual": {'marker': 's', 'alpha': 0.95, 's': 120, 'z': 3},
     }
-    plot_markers = {
-        "Mean residual": "o",
-        "Max residual": "s",
-    }
+
+    # Plot each series per-parameter so color encodes group and marker encodes series type
     series_seen = set()
+    group_seen = set()
     for series_name, residuals_by_parameter in residual_series:
-        series_x = []
-        series_y = []
+        props = series_markers.get(series_name, {'marker': 'o', 'alpha': 0.8, 's': 80, 'z': 2})
         for param in parameters:
             si = si_values.get(param, np.nan)
             residual = residuals_by_parameter.get(param, np.nan)
-            if not np.isnan(si) and not np.isnan(residual):
-                series_x.append(si)
-                series_y.append(residual)
-        if not series_x:
-            continue
-        ax.scatter(
-            series_x,
-            series_y,
-            alpha=0.8,
-            s=80,
-            color=plot_colours.get(series_name, "#808080"),
-            edgecolors="black",
-            linewidth=0.4,
-            marker=plot_markers.get(series_name, "o"),
-            label=series_name,
-            zorder=2,
-        )
+            if np.isnan(si) or np.isnan(residual):
+                continue
+            group = param.split('.', 1)[0] if '.' in param else param
+            colour = group_colour_map.get(group, '#808080')
+            ax.scatter(
+                [si],
+                [residual],
+                alpha=props['alpha'],
+                s=props['s'],
+                color=colour,
+                edgecolors='black',
+                linewidth=0.4,
+                marker=props['marker'],
+                zorder=props['z'],
+            )
         series_seen.add(series_name)
+
+    # Build legends: one for groups (colors) and one for series (marker shapes)
+    from matplotlib.lines import Line2D
+    group_handles = [
+        Line2D([0], [0], marker='o', color='w', label=g,
+               markerfacecolor=group_colour_map[g], markeredgecolor='black', markersize=8)
+        for g in unique_groups
+    ]
+    series_handles = []
+    for name in series_seen:
+        m = series_markers.get(name, {'marker': 'o'})['marker']
+        series_handles.append(Line2D([0], [0], marker=m, color='k', label=name,
+                                     markerfacecolor='gray', markeredgecolor='black', markersize=8))
+    # Place group (color) legend in the upper-left as requested
+    if group_handles:
+        ax.legend(handles=group_handles, title='Group', loc='upper left', fontsize=8)
+    # Place series (marker) legend in the upper-right without hiding the group legend
+    if series_handles:
+        ax.add_artist(ax.legend(handles=series_handles, title='Series', loc='upper right', fontsize=8))
 
     if cluster_labels:
         from matplotlib.lines import Line2D
@@ -1217,6 +1512,67 @@ def plot_si_vs_residuals(
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
 
+    mean_residuals = None
+    max_residuals = None
+    for name, mapping in residual_series:
+        if name == "Mean residual":
+            mean_residuals = mapping
+        if name == "Max residual":
+            max_residuals = mapping
+    if max_residuals is None:
+        max_residuals = {}
+        for param in parameters:
+            vals = [mapping.get(param, np.nan) for _, mapping in residual_series]
+            if vals:
+                max_v = np.nanmax(vals)
+                max_residuals[param] = float(max_v) if not np.isnan(max_v) else np.nan
+            else:
+                max_residuals[param] = np.nan
+
+    # Compute strongest partner per parameter from provided ss_ab_table
+    strongest_pair_by_param = {}
+    ss_ab_table_local = ss_ab_table or {}
+    for (param_a, param_b), interaction in ss_ab_table_local.items():
+        if np.isnan(interaction):
+            continue
+        for param in (param_a, param_b):
+            current = strongest_pair_by_param.get(param)
+            pair_key = tuple(sorted((param_a, param_b)))
+            if current is None or interaction > current[0]:
+                strongest_pair_by_param[param] = (float(interaction), pair_key)
+
+    summary_rows = []
+    for param in parameters:
+        si = si_values.get(param, np.nan)
+        mean_interaction = mean_residuals.get(param, np.nan) if mean_residuals is not None else np.nan
+        max_interaction = max_residuals.get(param, np.nan) if max_residuals is not None else np.nan
+        if np.isnan(si) and np.isnan(mean_interaction) and np.isnan(max_interaction):
+            continue
+
+        partner_pair = strongest_pair_by_param.get(param)
+        if partner_pair is not None:
+            pair_a, pair_b = partner_pair[1]
+            max_interaction_pair = f"{pair_a} | {pair_b}"
+        else:
+            max_interaction_pair = ""
+
+        summary_rows.append({
+            "parameter": param,
+            "single_sensitivity": float(si) if not np.isnan(si) else np.nan,
+            "mean_interaction": float(mean_interaction) if not np.isnan(mean_interaction) else np.nan,
+            "max_interaction": float(max_interaction) if not np.isnan(max_interaction) else np.nan,
+            "max_interaction_pair": max_interaction_pair,
+        })
+
+    csv_path = output_path.with_name(f"{output_path.stem}_summary.csv")
+    with open(csv_path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=["parameter", "single_sensitivity", "mean_interaction", "max_interaction", "max_interaction_pair"],
+        )
+        writer.writeheader()
+        writer.writerows(summary_rows)
+
     return {
         f"Group {index + 1}": [member for member in members if member in parameters]
         for index, (_, members) in enumerate(normalized_groups)
@@ -1253,39 +1609,21 @@ def heatmap_ss_ab(ss_ab_table, output_path, max_value= None):
 
 
     # --------------------------------------------------
-    # Hierarchical clustering with pinned first 3 parameters
+    # Hierarchical clustering (normal; no pinned parameters)
     # --------------------------------------------------
-
-    # Find indices of the three target parameters
-    target_labels = ["close_dist_threshold", "uncertainty_dist_threshold", "gripper_activation_threshold"]
-    target_params = []
-    for param in parameters:
-        if short_label(param) in target_labels and len(target_params) < 3:
-            target_params.append(param)
-    
-    # Ensure we have exactly 3 target params
-    target_params = target_params[:3]
-    remaining_params = [p for p in parameters if p not in target_params]
-    
-    # Apply clustering only to remaining parameters
-    if len(remaining_params) > 1:
-        remaining_indices = [param_index[p] for p in remaining_params]
-        remaining_matrix = matrix[np.ix_(remaining_indices, remaining_indices)]
-        cluster_matrix = np.nan_to_num(remaining_matrix, nan=0.0)
+    # Cluster all parameters normally using the full matrix.
+    if len(parameters) > 1:
+        indices = [param_index[p] for p in parameters]
+        cluster_matrix = np.nan_to_num(matrix[np.ix_(indices, indices)], nan=0.0)
         distance = pdist(cluster_matrix, metric="correlation")
         linkage_matrix = linkage(distance, method="average")
         order = leaves_list(linkage_matrix)
-        clustered_remaining = [remaining_params[i] for i in order]
+        parameters = [parameters[i] for i in order]
+        new_param_index = {param: idx for idx, param in enumerate(parameters)}
+        old_indices = [param_index[p] for p in parameters]
+        matrix = matrix[np.ix_(old_indices, old_indices)]
     else:
-        clustered_remaining = remaining_params
-    
-    # Combine: pinned params first, then clustered params
-    parameters = target_params + clustered_remaining
-    new_param_index = {param: idx for idx, param in enumerate(parameters)}
-    
-    # Reorder matrix
-    old_indices = [param_index[p] for p in parameters]
-    matrix = matrix[np.ix_(old_indices, old_indices)]
+        new_param_index = {param: idx for idx, param in enumerate(parameters)}
 
 
     # --------------------------------------------------
@@ -1426,36 +1764,19 @@ def heatmap_pair_means(augmented_pair_vectors, output_path, max_value=None):
         matrix[idx_a, idx_b] = float(np.nanmean(values))
         matrix[idx_b, idx_a] = float(np.nanmean(values))
 
-    # Find indices of the three target parameters
-    target_labels = ["close_dist_threshold", "uncertainty_dist_threshold", "gripper_activation_threshold"]
-    target_params = []
-    for param in parameters:
-        if short_label(param) in target_labels and len(target_params) < 3:
-            target_params.append(param)
-    
-    # Ensure we have exactly 3 target params
-    target_params = target_params[:3]
-    remaining_params = [p for p in parameters if p not in target_params]
-    
-    # Apply clustering only to remaining parameters
-    if len(remaining_params) > 1:
-        remaining_indices = [param_index[p] for p in remaining_params]
-        remaining_matrix = matrix[np.ix_(remaining_indices, remaining_indices)]
-        cluster_matrix = np.nan_to_num(remaining_matrix, nan=0.0)
+    # Cluster all parameters normally using the full matrix (no pinned parameters)
+    if len(parameters) > 1:
+        indices = [param_index[p] for p in parameters]
+        cluster_matrix = np.nan_to_num(matrix[np.ix_(indices, indices)], nan=0.0)
         distance = pdist(cluster_matrix, metric="correlation")
         linkage_matrix = linkage(distance, method="average")
         order = leaves_list(linkage_matrix)
-        clustered_remaining = [remaining_params[i] for i in order]
+        parameters = [parameters[i] for i in order]
+        new_param_index = {param: idx for idx, param in enumerate(parameters)}
+        old_indices = [param_index[p] for p in parameters]
+        matrix = matrix[np.ix_(old_indices, old_indices)]
     else:
-        clustered_remaining = remaining_params
-    
-    # Combine: pinned params first, then clustered params
-    parameters = target_params + clustered_remaining
-    new_param_index = {param: idx for idx, param in enumerate(parameters)}
-    
-    # Reorder matrix
-    old_indices = [param_index[p] for p in parameters]
-    matrix = matrix[np.ix_(old_indices, old_indices)]
+        new_param_index = {param: idx for idx, param in enumerate(parameters)}
 
     cmap = plt.cm.viridis.copy()
     cmap.set_bad("lightgray")
@@ -1849,9 +2170,9 @@ def main():
     )
     parser.add_argument(
         "--metric",
-        choices=["success", "anchor_error", "timesteps", "grasp"],
+        choices=["success", "anchor_error", "timesteps", "grasp", "epistemicity"],
         default="success",
-        help="Metric to analyze: success (default), anchor_error, timesteps, or grasp.",
+        help="Metric to analyze: success (default), anchor_error, timesteps, grasp, or epistemicity.",
     )
     parser.add_argument(
         "--include-failed-trials",
@@ -1909,7 +2230,7 @@ def main():
         si_val = si_values.get(tp, np.nan)
         means = one_d_successes_by_parameter.get(tp, {})
         print(f" - {tp}: S_i = {si_val}, 1D means = {means}")
-    
+
     _, _, _, _, augmented_pair_vectors, augmented_pair_diagnostics = compute_hi(
         parameters, pairwise_series, one_d_successes_by_parameter, standard_baseline
     )
@@ -1947,7 +2268,13 @@ def main():
     if heatmap_path.exists():
         print(f"Heatmap file already exists: {heatmap_path}. Skipping heatmap generation.")
     else:
-        heatmap_ss_ab(ss_ab_table, heatmap_path)
+        try:
+            heatmap_ss_ab(ss_ab_table, heatmap_path)
+        except ModuleNotFoundError as exc:
+            if exc.name == "scipy":
+                print("SciPy not installed; skipping SS_AB heatmap generation.")
+            else:
+                raise
 
     # mean_heatmap_path = output_dir / "pair_mean_heatmap.png"
     # if mean_heatmap_path.exists():
@@ -2117,15 +2444,15 @@ def main():
     #         knee=None
     #     )
 
-    if SI_SEPERATE:
-        sorted_value_plot(
-                si_values,
-                title="Sorted SI per Parameter",
-                ylabel="SI (Sensitivity Index)",
-                output_path=output_dir / "si_sorted.png",
-                log_scale=True,
-                knee=plateau_index_si
-            )
+    # if SI_SEPERATE:
+    #     sorted_value_plot(
+    #             si_values,
+    #             title="Sorted SI per Parameter",
+    #             ylabel="SI (Sensitivity Index)",
+    #             output_path=output_dir / "si_sorted.png",
+    #             log_scale=True,
+    #             knee=plateau_index_si
+    #         )
 
     # Early-vs-late comparison for sensitivity and residual magnitude.
     early_parameters, early_si_values, early_max_ssab_s, early_mean_ssab_s, _, _ = compute_window_metrics_summary(
@@ -2151,17 +2478,17 @@ def main():
         [si_early.get(param, np.nan) for param in comparison_parameters],
         [si_late.get(param, np.nan) for param in comparison_parameters],
         comparison_parameters,
-        "S_early",
-        "S_late",
-        "Sensitivity: Early vs Late",
+        "Visible",
+        "Not visible",
+        "Sensitivity: Visible vs Not visible",
         output_dir / "sensitivity_early_vs_late.png",
     )
     plot_early_vs_late_scatter(
         [residual_early.get(param, np.nan) for param in comparison_parameters],
         [residual_late.get(param, np.nan) for param in comparison_parameters],
         comparison_parameters,
-        "residual_early",
-        "residual_late",
+        "Visible",
+        "Not visible",
         "Residual: Early vs Late",
         output_dir / "residual_early_vs_late.png",
     )
@@ -2186,6 +2513,7 @@ def main():
             ("Mean residual", mean_ssab_s),
             ("Max residual", max_ssab_s),
         ],
+        ss_ab_table=ss_ab_table,
     )
 
     #get top "plateau index" number of parameters by max_ssab_s
