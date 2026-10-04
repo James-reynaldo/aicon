@@ -81,8 +81,4 @@ site/
 # OS specific
 .DS_Store
 Thumbs.db
-src/aicon/drawer_tutorial/Gridsearch/results_gridsearch/
-src/aicon/drawer_tutorial/Single_Sweep/results/
-src/aicon/drawer_tutorial/Single_Sweep/Visualization/
-src/aicon/drawer_tutorial/data/
-src/aicon/drawer_tutorial/Pairwise_Sweep/Visualization/
+src/aicon/drawer_tutorial/Ignored_files/

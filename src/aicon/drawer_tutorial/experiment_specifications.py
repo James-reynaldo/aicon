@@ -16,12 +16,17 @@ from aicon.drawer_tutorial.sensors import BearingSensor, DrawerPoseSenser, EEFor
 OPEN_VALUE = -0.1  # The open value for the drawer joint, used in the DrawerOpenViaJointGoal
 
 def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params=None, connection_params=None,
-                                               noise_scale: float = 0.0, prior_noise_std: float = 0.05, prior_noise_std_kinematic: float = 0.15):
+                                               noise_scale: float = 0.0, prior_noise_std: float = 0.05,
+                                               prior_noise_std_kinematic: float = 0.15,
+                                               sensor_noise_overrides: dict | None = None):
     """
     Builds the connections and components for the basic drawer motion experiment.
     """
 
-    print("Building functions with noise_scale:", noise_scale, "prior_noise_std:", prior_noise_std, "prior_noise_std_kinematic:", prior_noise_std_kinematic)
+    sensor_noise_overrides = sensor_noise_overrides or {}
+    print("Building functions with noise_scale:", noise_scale, "prior_noise_std:", prior_noise_std,
+          "prior_noise_std_kinematic:", prior_noise_std_kinematic,
+          "sensor_noise_overrides:", sensor_noise_overrides)
     estimator_params = estimator_params or {}
     connection_builders = build_connections(connection_params)
     component_builders = {
@@ -36,25 +41,29 @@ def get_building_functions_basic_drawer_motion(sim_env_pointer, estimator_params
                                                                      ("GraspedLikelihood",)},
                                                         device=torch.device("cpu"),
                                                         dtype=torch.double, mockbuild=mockbuild,
-                                                        sim_env_pointer=sim_env_pointer, noise_scale=noise_scale),
+                                                        sim_env_pointer=sim_env_pointer,
+                                                        noise_scale=sensor_noise_overrides.get("EEForceSensor", noise_scale)),
         "EEPosSensor": lambda mockbuild: EEPoseSensor("EEPosSensor",
                                                         connections={k: connection_builders[k] for k in
                                                                      ("DirectMeasurement",)},
                                                         device=torch.device("cpu"),
                                                         dtype=torch.double, mockbuild=mockbuild,
-                                                        sim_env_pointer=sim_env_pointer, noise_scale=noise_scale),
+                                                        sim_env_pointer=sim_env_pointer,
+                                                        noise_scale=sensor_noise_overrides.get("EEPosSensor", noise_scale)),
         "DrawerPosSensor": lambda mockbuild: DrawerPoseSenser("DrawerPosSensor",
                                                         connections={k: connection_builders[k] for k in
                                                                      ("DrawerDirectMeasurement",)},
                                                         device=torch.device("cpu"),
                                                         dtype=torch.double, mockbuild=mockbuild,
-                                                        sim_env_pointer=sim_env_pointer, noise_scale=noise_scale),
+                                                        sim_env_pointer=sim_env_pointer,
+                                                        noise_scale=sensor_noise_overrides.get("DrawerPosSensor", noise_scale)),
         "BearingSensor": lambda mockbuild: BearingSensor("BearingSensor",
                                 connections={k: connection_builders[k] for k in
                                          ("ProjectiveGeometry",)},
                                 device=torch.device("cpu"),
                                 dtype=torch.double, mockbuild=mockbuild,
-                                sim_env_pointer=sim_env_pointer, noise_scale=noise_scale),
+                                sim_env_pointer=sim_env_pointer,
+                                noise_scale=sensor_noise_overrides.get("BearingSensor", noise_scale)),
         "EEVelocities": lambda mockbuild: VeloEEAction("EEVelocities",
                                                        connections={k: connection_builders[k] for k in
                                                                     ("ForwardKinematics",)},
