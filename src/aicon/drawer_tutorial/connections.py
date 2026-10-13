@@ -122,8 +122,7 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             uncertainty_dist_threshold: float = 0.4,
             small_likelihood_value: float = 1e-8,
             uncertainty_bias: float = 0.2,
-            uncertainty_scale_uncertainty: float = 5.0,
-            uncertainty_scale_relevance: float = 20.0,
+            uncertainty_scale: float = 5.0,
             dist_sigmoid_scale: float = 10.0,
             time_since_hand_change_threshold: float = 1.0,
             ft_tresh_multiplier: float = 6.0,
@@ -142,8 +141,7 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
         self.small_likelihood_value = small_likelihood_value
         # previously hard-coded constants
         self.uncertainty_bias = uncertainty_bias
-        self.uncertainty_scale_uncertainty = uncertainty_scale_uncertainty
-        self.uncertainty_scale_relevance = uncertainty_scale_relevance
+        self.uncertainty_scale = uncertainty_scale
         self.dist_sigmoid_scale = dist_sigmoid_scale
         self.time_since_hand_change_threshold = time_since_hand_change_threshold
         self.ft_tresh_multiplier = ft_tresh_multiplier
@@ -152,7 +150,7 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
     def define_implicit_connection_function(self):
         def connection_func(likelihood_grasped_drawer, distance_ee_drawer, uncertainty_dist, gripper_activation, ee_force_mag_meas, time_since_hand_change):
             likelihood_given_uncertainty = torch.clip(
-                torch.exp(-(uncertainty_dist - self.uncertainty_bias) * self.uncertainty_scale_uncertainty),
+                torch.exp(-(uncertainty_dist - self.uncertainty_bias) * self.uncertainty_scale),
                 max=1.0,
             )
             innovation_from_uncertainty = likelihood_given_uncertainty - likelihood_grasped_drawer
@@ -162,7 +160,7 @@ class DistGraspHandConnection(ActiveInterconnection): #GraspedLikelihood
             dist_relevance = (
                 1 - torch.sigmoid((distance_ee_drawer[1] - 0.5) * self.dist_sigmoid_scale)
             ) * torch.clip(
-                torch.exp(-(uncertainty_dist - self.uncertainty_bias) * self.uncertainty_scale_relevance),
+                torch.exp(-(uncertainty_dist - self.uncertainty_bias) * self.uncertainty_scale),
                 max=1.0,
             )
             expected_dist = torch.sum(distance_ee_drawer) + uncertainty_dist

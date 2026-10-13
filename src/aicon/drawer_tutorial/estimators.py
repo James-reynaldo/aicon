@@ -137,8 +137,7 @@ class DrawerPositionEstimator(EstimationComponent):
                  sample_init_mean_uncertainty_multiplier : float = 2.0,
                  meas_noise_factor : float = 0.025,
                  visual_likelihood_steepness : float = 5.0,
-                 R_add_scale : float = 5.0,
-                 measurement_nan_reject_scale : float = 0.01,
+                 R_add_scale : float = 0.05,
                  forward_noise_grasped_coeff : float = 1e1,
                  forward_noise_base : float = 0.005,
                  grasped_update_R_scale : float = 1e-6,
@@ -181,7 +180,6 @@ class DrawerPositionEstimator(EstimationComponent):
             meas_noise_factor: Factor for measurement noise
             visual_likelihood_steepness: Steepness used for the visibility likelihood
             R_add_scale: Scale for additional measurement covariance
-            measurement_nan_reject_scale: Scale factor applied when measurements are NaN
             forward_noise_grasped_coeff: Grasp-dependent forward process noise coefficient
             forward_noise_base: Base forward process noise coefficient
             grasped_update_R_scale: Noise scale for grasped-kinematics update
@@ -212,7 +210,6 @@ class DrawerPositionEstimator(EstimationComponent):
         self.initial_drawer_pos = initial_drawer_pos
         self.sim_env_pointer = sim_env_pointer
         # Edge case handling parameters
-        self.measurement_nan_reject_scale = measurement_nan_reject_scale
         self.tf_lookup_timeout = tf_lookup_timeout
         self.hand_change_recovery_time = hand_change_recovery_time
         # EKF parameters
@@ -408,7 +405,7 @@ class DrawerPositionEstimator(EstimationComponent):
                                                                    uncertainty_ee,
                                                                    mock_relative_position_in_CF_drawer,
                                                                    R_meas,
-                                                                   R_add * self.measurement_nan_reject_scale,
+                                                                   R_add,
                                                                    likelihood_existent_measurement,
                                                                    outlier_rejection_treshold=0.0)
             else:
@@ -833,14 +830,12 @@ class KinematicJointEstimator(EstimationComponent):
                  max_length_differentiation_trace: Union[int, None] = None,
                  initial_rotation_xy : Union[float, None] = None,
                  initial_uncertainty_scale : Union[float, None] = 1e0,
-                 initial_elevation_uncertainty_scale: float = 1e0,
-                 initial_azimuth_uncertainty_scale: float = 1e0,
+                 initial_axis_uncertainty_scale: float = 1e0,
                  joint_initial_uncertainty_scale: float = 1e-3,
                  sample_init_mean : bool = False,
                  grasped_noise: float = 1e-2,
                  ungrasped_noise: float = 5e-5,
-                 axis_azimuth_process_noise: float = 1e-2,
-                 axis_elevation_process_noise: float = 1e-2,
+                 axis_process_noise: float = 1e-2,
                  joint_process_noise: float = 1e1,
                  anchor_process_noise: float = 2e-2,
                  grasp_threshold: float = 0.5,
@@ -875,8 +870,7 @@ class KinematicJointEstimator(EstimationComponent):
         # The EKF assigns a residual according to state uncertainty.  Keep
         # these as separate multipliers so callers can make drawer travel
         # (state index 2) more adjustable than the fixed joint axis (0:2).
-        self.initial_azimuth_uncertainty_scale = initial_azimuth_uncertainty_scale
-        self.initial_elevation_uncertainty_scale = initial_elevation_uncertainty_scale
+        self.initial_axis_uncertainty_scale = initial_axis_uncertainty_scale
         self.joint_initial_uncertainty_scale = joint_initial_uncertainty_scale
         self.sample_init_mean = sample_init_mean
         self.initial_azimuth_default = initial_azimuth_default
@@ -884,8 +878,7 @@ class KinematicJointEstimator(EstimationComponent):
         # Estimation function parameters
         self.grasped_noise = grasped_noise
         self.ungrasped_noise = ungrasped_noise
-        self.axis_azimuth_process_noise = axis_azimuth_process_noise
-        self.axis_elevation_process_noise = axis_elevation_process_noise
+        self.axis_process_noise = axis_process_noise
         self.kinematic_axis_noise_std = kinematic_axis_noise_std
         self.joint_process_noise = joint_process_noise
         self.anchor_process_noise = anchor_process_noise
@@ -919,8 +912,8 @@ class KinematicJointEstimator(EstimationComponent):
             self.quantities["uncertainty_joint"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device)
         else:
             self.quantities["uncertainty_joint"] = torch.eye(self.state_dim, dtype=self.dtype, device=self.device) * self.initial_uncertainty_scale
-        self.quantities["uncertainty_joint"][0, 0] *= self.initial_azimuth_uncertainty_scale
-        self.quantities["uncertainty_joint"][1, 1] *= self.initial_elevation_uncertainty_scale
+        self.quantities["uncertainty_joint"][0, 0] *= self.initial_axis_uncertainty_scale
+        self.quantities["uncertainty_joint"][1, 1] *= self.initial_axis_uncertainty_scale
         self.quantities["uncertainty_joint"][2, 2] *= self.joint_initial_uncertainty_scale
         self.quantities["uncertainty_joint"][3:6,3:6] = self.connections["DrawerKinematics"].connected_quantities["uncertainty_drawer"]
         if self.sample_init_mean:
@@ -954,7 +947,7 @@ class KinematicJointEstimator(EstimationComponent):
 
         R_additive_grasped = torch.eye(3, device=self.device, dtype=self.dtype) * self.grasped_noise
         R_additive_ungrasped = torch.eye(3, device=self.device, dtype=self.dtype) * self.ungrasped_noise
-        Q_diag = torch.tensor([self.axis_azimuth_process_noise, self.axis_elevation_process_noise, self.joint_process_noise, self.anchor_process_noise, self.anchor_process_noise, self.anchor_process_noise], device=self.device, dtype=self.dtype) # important hyperparameter
+        Q_diag = torch.tensor([self.axis_process_noise, self.axis_process_noise, self.joint_process_noise, self.anchor_process_noise, self.anchor_process_noise, self.anchor_process_noise], device=self.device, dtype=self.dtype) # important hyperparameter
 
         def f_func(kinematic_joint, uncertainty_joint, position_drawer, uncertainty_drawer, likelihood_grasped_drawer, dt):
             """

@@ -39,7 +39,7 @@ from aicon.middleware.python_sequential import build_components, run_component_s
 RENDER = os.getenv("AICON_RENDER", "false").lower() == "true"
 PLOTTER = os.getenv("AICON_PLOTTER", "false").lower() == "true"
 MANUAL_CONTROL = os.getenv("AICON_MANUAL_CONTROL", "false").lower() == "true"
-SAVE_PNG = os.getenv("AICON_SAVE_PNG", "true").lower() == "true"
+SAVE_PNG = os.getenv("AICON_SAVE_PNG", "false").lower() == "true"
 
 # These toggles are intentionally kept in a single place to preserve the current
 # runtime defaults and make the demo easy to configure in one location.
