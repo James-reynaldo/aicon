@@ -81,4 +81,8 @@ site/
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Evaluation job scripts (SLURM logs and generated job outputs)
+src/aicon/drawer_tutorial/Evaluation/Pairwise_Sweep/Job_scripts/
+src/aicon/drawer_tutorial/Evaluation/Single_Sweep/Job_scripts/
 src/aicon/drawer_tutorial/Ignored_files/
